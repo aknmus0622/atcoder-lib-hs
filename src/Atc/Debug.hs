@@ -1,0 +1,152 @@
+-- | WA を睨むための出力。
+--
+-- 書いたものは stderr に出る。採点に使われるのは stdout だけなので、
+-- 残したまま `atc test` を走らせても判定は変わらず、@stderr:@ の欄に並ぶ。
+-- AC の回も表示される。
+--
+-- == 置き場所
+--
+-- 値が流れているところに挟む。関数に適用してはいけない (下の「関数を渡さない」)。
+--
+-- > -- 式の途中
+-- > solve xs = sum (dbg "偶数" (filter even xs))
+-- >
+-- > -- where の各段
+-- > solve xs = total
+-- >   where
+-- >     evens = dbg "偶数" (filter even xs)
+-- >     total = dbg "合計" (sum evens)
+-- >
+-- > -- & のパイプライン
+-- > xs & dbg "元" & map (* 2) & dbg "2倍" & sum
+-- >
+-- > -- >>> のパイプライン
+-- > main = interact $ lines >>> dbg "行" >>> solve >>> dbg "答え" >>> show
+-- >
+-- > -- 再帰の各段
+-- > countdown n = dbg "n" n + countdown (n - 1)
+-- >
+-- > -- do の中を通りすがりに
+-- > main = do
+-- >   xs <- getInts
+-- >   dbgIO "入力" xs
+--
+-- == やりがちな間違い
+--
+-- === 恒等関数を渡す
+--
+-- > main = interact $ dbg "入力" id   -- ✗
+-- > main = interact $ dbg "入力"      -- ○
+--
+-- @dbg label@ は、それだけで @a -> a@ という関数になっている。@interact@ が
+-- 欲しがる @String -> String@ はまさにこの形なので、@id@ を足すと形は合って
+-- しまう。合わないのは中身の方で、@a@ が @String@ ではなく
+-- @String -> String@ に決まり、「流れてくる文字列」ではなく「@id@ という
+-- 関数そのもの」を表示しようとする。関数に @Show@ は無い。
+--
+-- > No instance for ‘Show (String -> String)’
+-- >   arising from a use of ‘dbg’
+-- >   (maybe you haven't applied a function to enough arguments?)
+--
+-- 括弧の中が @… -> …@ になっていたら、値ではなく関数を渡している。
+--
+-- === IO アクションを覗こうとする
+--
+-- > main = dbg "act" (print 1)   -- ✗ No instance for ‘Show (IO ())’
+--
+-- @dbg@ が見られるのは値だけ。IO が何をしたかを見たいなら、その中身を
+-- @dbgIO@ で覗く。
+--
+-- === do の文として裸で置く
+--
+-- > main = do
+-- >   dbg "xs" xs   -- ✗
+-- >   print xs
+--
+-- 文の位置には @IO a@ が要るが、@dbg "xs" xs@ は @[Int]@ のまま。しかも
+-- 出るエラーが @dbg@ に触れないので分かりにくい。
+--
+-- > Couldn't match expected type: IO t0 with actual type: [()]
+--
+-- この位置に置きたいときは @dbgIO@ を使う。
+--
+-- === 値を渡し忘れる
+--
+-- > print (dbg "ラベルだけ")   -- ✗ No instance for ‘Show (a0 -> a0)’
+--
+-- 引数が 1 つだと、まだ @a -> a@ という関数のまま。やはり @… -> …@ が
+-- エラーに出るので、上と同じ読み方ができる。
+--
+-- === 無限の構造を渡す — これだけはコンパイルが通る
+--
+-- > print (take 3 (dbg "無限" [1 ..]))   -- ✗ 止まらない
+--
+-- @trace@ はメッセージを組み立ててから印字するので、@show [1 ..]@ が
+-- 終わらないかぎり 1 文字も出ない。@take 3@ があっても手遅れで、
+-- @atc test@ からは
+--
+-- > TLE          sample-1  2000 ms
+-- >     actual:
+-- >       (empty)
+--
+-- としか見えない。stderr の欄すら出ないので、@dbg@ が原因だと気づきにくい。
+-- 無限リストや巨大な構造は、@dbg "先頭5件" (take 5 xs)@ のように
+-- __先に切り詰めてから__ 渡す。
+--
+-- == 出てこないとき
+--
+-- 評価されなければ出ない。これが出ない原因のほとんど。
+--
+-- > let unused = dbg "A" 42   -- 使わなければ一生出ない
+-- > head (map (dbg "要素") [10, 20, 30])   -- 「要素 = 10」だけ
+-- > if cond then dbg "then" x else dbg "else" y   -- 通った側だけ
+--
+-- 値に挟んでも出ないなら、@dbgIO@ で do の中から強制する。
+--
+-- == 出る順は書いた順ではない
+--
+-- 強制された順に出る。入れ子なら内側が先。
+--
+-- > print (dbg "外" (dbg "内" 1 + 2))
+-- > -- 内 = 1
+-- > -- 外 = 3
+--
+-- == 回数は当てにならない
+--
+-- @atc test@ も AtCoder も @-O2@ でコンパイルする。同じ引数の呼び出しは
+-- まとめられるので、@f 3 + f 3@ の中の @dbg@ は 1 回しか出ないことがある。
+-- 値を見るのには使えるが、呼ばれた回数を数えてはいけない。
+--
+-- == 量に気をつける
+--
+-- @atc test@ は先頭 30 行で打ち切り、残りを @... (N more lines)@ と数える。
+-- ループの内側に置くとそれで埋まるので、@dbg "先頭5件" (take 5 xs)@ のように
+-- 切り出すか、ループの外に置く。
+--
+-- 速度も食う。1 回およそ 4 マイクロ秒で、stderr を捨てても消えない。
+-- 20 万回で 0.9 秒。ループ内に残したまま提出すると TLE の種になる。
+--
+-- == 消し忘れ
+--
+-- 1 枚にまとめるとき、使っていない @dbg@ は提出物から落ちる。使ったまま
+-- 提出すればそのまま入るので、提出前に消すこと。ライブラリ側に書いた
+-- @trace@ の消し忘れは @cabal build@ が @-Wunused-imports@ で教えてくれる。
+module Atc.Debug where
+
+import Debug.Trace (trace)
+
+-- | ラベルを付けて値を覗き、その値をそのまま返す。
+--
+-- > solve xs = sum (dbg "偶数" (filter even xs))
+--
+-- 評価されなければ何も出ない。詳しくはモジュールの説明。
+dbg :: (Show a) => String -> a -> a
+dbg label x = trace (label ++ " = " ++ show x) x
+
+-- | 同じものを do の中で。値を取り出さず、その場で強制して覗く。
+--
+-- > main = do
+-- >   xs <- getInts
+-- >   dbgIO "入力" xs
+dbgIO :: (Show a) => String -> a -> IO ()
+dbgIO label x = dbg label x `seq` pure ()
