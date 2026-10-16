@@ -30,6 +30,7 @@
 -- > mapRow f g          Grid v b        m (MGrid v m b)   (imapRow / mapColumn / imapColumn も同じ)
 -- > scanRow f z g       Grid v b        m (MGrid v m b)   (scanColumn も同じ)
 -- > foldRow f z g       t b             m (t b)           (foldColumn も同じ)
+-- > foldGrid f z g      b               m b
 --
 -- ほかに 'inGrid' / 'neighborPos4' / 'gridWidth' / 'gridHeight' / 'gridData' も共通。
 --
@@ -37,7 +38,7 @@
 --
 -- 値を計算して格納する関数には、名前に @'@ を付けた strict 版がある
 -- ('setElem'' / 'adjustElem'' / 'mapGrid'' / 'imapGrid'' / 'mapRow'' / 'imapRow'' /
--- 'mapColumn'' / 'imapColumn'' / 'scanRow'' / 'scanColumn'' / 'foldRow'' / 'foldColumn'')。
+-- 'mapColumn'' / 'imapColumn'' / 'scanRow'' / 'scanColumn'' / 'foldRow'' / 'foldColumn'' / 'foldGrid'')。
 -- 値を評価してから格納する (fold は途中結果を評価しながら畳む)。
 --
 -- @U.Vector@ / @UM.MVector@ は格納するときに必ず評価されるので、どちらでも同じ。
@@ -82,6 +83,21 @@
 -- > let rowSum = foldRow' (+) 0 g
 -- > rowSum U.! r                            -- U.Vector になる
 -- > print (foldColumn' max 0 g :: [Int])    -- print だけだと決まらないので書く
+--
+-- == 全要素の畳み込み
+--
+-- 'foldGrid' / 'foldGrid'' は全マスを行優先 (左上から右へ、上の行から下へ) に
+-- @foldl@ / @foldl'@ で畳む。中身が @U.Vector@ でも 'MGrid' でも使える。
+--
+-- > foldGrid' (+) 0 g                -- 全マスの和
+-- > foldGrid' max minBound g         -- 最大値
+--
+-- 中身が @V.Vector@ (やリスト) の 'Grid' は 'Foldable' でもあるので、
+-- @sum@ / @maximum@ / @toList@ / @elem@ / @length@ などがそのまま使える。
+-- @U.Vector@ は 'Foldable' にできない (要素に @Unbox@ が要る) ので、'foldGrid' を使う。
+--
+-- > let g = from2D [[1, 2], [3, 4]] :: Grid V.Vector Int
+-- > sum g                            -- 10
 --
 -- == 可変版 'MGrid'
 --
@@ -132,6 +148,7 @@ module Atc.Grid where
 import Control.Monad (forM, forM_)
 import Control.Monad.Primitive (PrimMonad, PrimState)
 import Control.Monad.ST (ST, runST)
+import qualified Data.Foldable as F
 import Data.Kind (Constraint, Type)
 import qualified Data.Vector as V
 import qualified Data.Vector.Generic as G
@@ -179,6 +196,19 @@ instance (Eq (v a)) => Eq (Grid v a) where
 instance (Show (v a)) => Show (Grid v a) where
   show (Grid w h d) =
     "Grid {width = " ++ show w ++ ", height = " ++ show h ++ ", data = " ++ show d ++ "}"
+
+-- | 要素を行優先に並べたものとして畳む。中身が 'Foldable' のとき (@V.Vector@ やリスト) だけ。
+-- @U.Vector@ には 'foldGrid' を使う。
+--
+-- 右辺は @F.@ を付けて呼ぶ。@atc bundle@ は解答と 1 ファイルにまとめるので、
+-- 解答側が @import Data.IntMap (toList)@ などをしていても名前がぶつからないように。
+instance (Foldable v) => Foldable (Grid v) where
+  foldr f z (Grid _ _ d) = F.foldr f z d
+  foldl' f z (Grid _ _ d) = F.foldl' f z d
+  foldMap f (Grid _ _ d) = F.foldMap f d
+  toList (Grid _ _ d) = F.toList d
+  null (Grid w h _) = w * h == 0
+  length (Grid w h _) = w * h
 
 -- | 大きさだけ分かればよい操作。
 class GridShape g where
@@ -474,6 +504,16 @@ foldColumn f z g = primRun g $ \m -> collectList @t <$> foldColumnM False f z m
 foldColumn' :: forall t k a b. (GridOf k a, Collect t b) => (b -> a -> b) -> b -> k a -> Ret k (t b)
 foldColumn' f z g = primRun g $ \m -> collectList @t <$> foldColumnM True f z m
 
+-- | 全マスを行優先に @foldl@ で畳む。
+{-# INLINE foldGrid #-}
+foldGrid :: (GridOf k a) => (b -> a -> b) -> b -> k a -> Ret k b
+foldGrid f z g = primRun g (foldGridM False f z)
+
+-- | 'foldGrid' の @foldl'@ 版。途中結果を評価しながら畳む。
+{-# INLINE foldGrid' #-}
+foldGrid' :: (GridOf k a) => (b -> a -> b) -> b -> k a -> Ret k b
+foldGrid' f z g = primRun g (foldGridM True f z)
+
 -- ---------------------------------------------------------------------
 -- MGrid の上の処理 (共通関数の中身)
 
@@ -588,6 +628,17 @@ foldRowM strict f z (MGrid w h d) = forM [0 .. h - 1] $ \r -> do
             if strict then acc' `seq` go acc' (c + 1) else go acc' (c + 1)
   if strict then z `seq` go z 0 else go z 0
 {-# INLINABLE foldRowM #-}
+
+foldGridM :: (PrimMonad n, GM.MVector v a) => Bool -> (b -> a -> b) -> b -> MGrid v n a -> n b
+foldGridM strict f z (MGrid w h d) = if strict then z `seq` go z 0 else go z 0
+  where
+    go acc i
+      | i == w * h = pure acc
+      | otherwise = do
+          x <- GM.unsafeRead d i
+          let acc' = f acc x
+          if strict then acc' `seq` go acc' (i + 1) else go acc' (i + 1)
+{-# INLINABLE foldGridM #-}
 
 -- 列ごとの途中結果を持ち、行優先で読みながら更新する。
 foldColumnM :: (PrimMonad n, GM.MVector v a) => Bool -> (b -> a -> b) -> b -> MGrid v n a -> n [b]
