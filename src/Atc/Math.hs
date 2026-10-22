@@ -2,13 +2,12 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UnboxedTuples #-}
 
 module Atc.Math where
 
 import Control.Monad.ST (runST)
-import Data.Kind (Type)
+import Data.List (group)
 import qualified Data.Vector as V
 import qualified Data.Vector.Algorithms.Intro as Intro
 import qualified Data.Vector.Generic as G
@@ -28,13 +27,13 @@ lcmAll = foldr lcm 1
 -- 'Int' と 'Integer' のどちらでも同じ名前で使える ('PrimeNum')。
 --
 -- > isPrime (998244353 :: Int)              -- True
--- > primeFactors (360 :: Int)               -- [2,2,2,3,3,5]        (U.Vector Int)
--- > primeFactorCounts (360 :: Int)          -- [(2,3),(3,2),(5,1)]  (U.Vector (Int, Int))
--- > primeFactors (2 ^ 70 * 3 :: Integer)    -- [2,2,…,2,3]          (V.Vector Integer)
+-- > primeFactors (360 :: Int)               -- [2,2,2,3,3,5]
+-- > primeFactorCounts (360 :: Int)          -- [(2,3),(3,2),(5,1)]
+-- > primeFactors (2 ^ 70 * 3 :: Integer)    -- [2,2,…,2,3]
 -- > powMod (2 :: Integer) (10 ^ 30) (10 ^ 20 + 39)
 --
--- 結果の Vector は、'Int' なら @U.Vector@、'Integer' なら @V.Vector@
--- ('Integer' は Unboxed にできないため)。個数は どちらも 'Int'。
+-- 結果はリスト。個数は 'Int' でも 'Integer' でも 'Int'。中の計算は Vector で行い、
+-- 最後にリストにしている (素因数は 'Int' で高々 63 個なので、変換の手間は無視できる)。
 --
 -- 数値リテラルを直接渡すときは型を書く (@isPrime 7@ だけだと型が決まらない)。
 -- 入力から読んだ値なら型は決まっているので不要。
@@ -53,21 +52,18 @@ lcmAll = foldr lcm 1
 
 -- | 素数判定・素因数分解ができる整数型。
 class (Integral a) => PrimeNum a where
-  -- | 結果を並べる Vector。'Int' は @U.Vector@、'Integer' は @V.Vector@。
-  type PrimeVec a :: Type -> Type
-
   -- | 素数か。
   isPrime :: a -> Bool
 
   -- | 素因数を小さい順に、重複も含めて並べる。@n <= 1@ は空。
   --
   -- > primeFactors (360 :: Int)   -- [2,2,2,3,3,5]
-  primeFactors :: a -> PrimeVec a a
+  primeFactors :: a -> [a]
 
   -- | @(素因数, 個数)@ を素因数の小さい順に並べる。@n <= 1@ は空。
   --
   -- > primeFactorCounts (360 :: Int)   -- [(2,3),(3,2),(5,1)]
-  primeFactorCounts :: a -> PrimeVec a (a, Int)
+  primeFactorCounts :: a -> [(a, Int)]
 
   -- | @a * b mod m@ (@0@ 以上 @m@ 未満)。@m >= 1@。'Int' でも桁あふれしない。
   mulMod :: a -> a -> a -> a
@@ -76,13 +72,11 @@ class (Integral a) => PrimeNum a where
   powMod :: a -> a -> a -> a
 
 instance PrimeNum Int where
-  type PrimeVec Int = U.Vector
-
   isPrime n = n >= 2 && isPrimeW (fromIntegral n)
 
   primeFactors n
-    | n <= 1 = U.empty
-    | otherwise = U.map fromIntegral (primeFactorsW (fromIntegral n))
+    | n <= 1 = []
+    | otherwise = map fromIntegral (U.toList (primeFactorsW (fromIntegral n)))
 
   primeFactorCounts = countRuns . primeFactors
 
@@ -91,16 +85,14 @@ instance PrimeNum Int where
   powMod a e m = fromIntegral (powModW (toWordMod a m) (fromIntegral e) (fromIntegral m))
 
 instance PrimeNum Integer where
-  type PrimeVec Integer = V.Vector
-
   isPrime n
     | n < 2 = False
     | otherwise = isPrimeI n
 
   primeFactors n
-    | n <= 1 = V.empty
-    | n < wordLimit = V.map toInteger (V.convert (primeFactorsW (fromInteger n)))
-    | otherwise = primeFactorsI n
+    | n <= 1 = []
+    | n < wordLimit = map toInteger (U.toList (primeFactorsW (fromInteger n)))
+    | otherwise = V.toList (primeFactorsI n)
 
   primeFactorCounts = countRuns . primeFactors
 
@@ -115,20 +107,8 @@ instance PrimeNum Integer where
 -- 型によらない部分
 
 -- 並べ替え済みの素因数を (素因数, 個数) にまとめる。
-countRuns :: (G.Vector v a, G.Vector v (a, Int), Eq a) => v a -> v (a, Int)
-countRuns fs = runST $ do
-  let len = G.length fs
-  buf <- GM.unsafeNew len
-  let go !i !k
-        | i >= len = pure k
-        | otherwise = do
-            let p = G.unsafeIndex fs i
-                j = maybe len (+ i) (G.findIndex (/= p) (G.unsafeDrop i fs))
-            GM.unsafeWrite buf k (p, j - i)
-            go j (k + 1)
-  k <- go 0 0
-  G.unsafeFreeze (GM.unsafeSlice 0 k buf)
-{-# INLINE countRuns #-}
+countRuns :: (Eq a) => [a] -> [(a, Int)]
+countRuns fs = [(p, length g) | g@(p : _) <- group fs]
 
 -- 小さい素因数は割り算で先に取る (ρ 法は 2 や小さい素数が苦手)。
 smallPrimes :: [Int]
