@@ -46,10 +46,10 @@ getCharGrid w h = Grid w h . U.concat <$> mapM (const getRow) [1 .. h]
 
 -- | 1 行ずつ、空白区切りで出力する。
 putIntGrid :: Grid U.Vector Int -> IO ()
-putIntGrid g = B.hPutBuilder stdout (foldMap row (to2D g))
+putIntGrid g = B.hPutBuilder stdout (foldMap row (to2D g :: [[Int]]))
   where
     row xs = mconcat (zipWith (<>) (mempty : repeat (B.char7 ' ')) (map B.intDec xs)) <> B.char7 '\n'
 
 -- | 1 行ずつ、区切りなしで出力する。
 putCharGrid :: Grid U.Vector Char -> IO ()
-putCharGrid g = B.hPutBuilder stdout (foldMap (\xs -> B.stringUtf8 xs <> B.char7 '\n') (to2D g))
+putCharGrid g = B.hPutBuilder stdout (foldMap (\xs -> B.stringUtf8 xs <> B.char7 '\n') (to2D g :: [String]))

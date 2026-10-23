@@ -24,7 +24,7 @@
 -- > setElem p x g       Grid v a        m ()
 -- > adjustElem p f g    Grid v a        m ()
 -- > neighbors4 p g      [(Pos, a)]      m [(Pos, a)]
--- > to2D g              [[a]]           m [[a]]
+-- > to2D g              t (s a)         m (t (s a))
 -- > transposeGrid g     Grid v a        m (MGrid v m a)
 -- > mapGrid f g         Grid v b        m (MGrid v m b)   (imapGrid も同じ)
 -- > mapRow f g          Grid v b        m (MGrid v m b)   (imapRow / mapColumn / imapColumn も同じ)
@@ -58,7 +58,7 @@
 --
 -- > let g = from2D [[1, 2, 3], [4, 5, 6]] :: Grid U.Vector Int
 -- > getElem (1, 1) g                 -- Just 5
--- > to2D (setElem (1, 1) 99 g)       -- [[1,2,3],[4,99,6]]
+-- > to2D (setElem (1, 1) 99 g) :: [[Int]]   -- [[1,2,3],[4,99,6]]
 -- > neighbors4 (0, 1) g              -- [((1,1),5),((0,0),1),((0,2),3)]
 --
 -- 'setElem' / 'adjustElem' は 1 回ごとに全体をコピーする (O(HW))。
@@ -83,6 +83,14 @@
 -- > let rowSum = foldRow' (+) 0 g
 -- > rowSum U.! r                            -- U.Vector になる
 -- > print (foldColumn' max 0 g :: [Int])    -- print だけだと決まらないので書く
+--
+-- 'to2D' も同じで、外側 (行の並び) と内側 (1 行) をそれぞれ推論する。
+-- 内側はリスト・@V.Vector@・@U.Vector@、外側はリストか @V.Vector@
+-- (@U.Vector@ は中に Vector を入れられない)。
+--
+-- > let rows = to2D g :: V.Vector (U.Vector Int)
+-- > rows V.! r U.! c
+-- > mapM_ print (to2D g :: [[Int]])
 --
 -- == 全要素の畳み込み
 --
@@ -313,7 +321,7 @@ instance (PrimMonad m) => GridKind (MGrid v m) where
 -- | @k a@ がグリッドとして使える。共通関数の制約はこれ。
 type GridOf k a = (GridKind k, GridShape (k a), CanHold k a, GM.MVector (MutOf k) a)
 
--- | 'foldRow' / 'foldColumn' の結果を並べる先 (リスト・@V.Vector@・@U.Vector@)。
+-- | 'foldRow' / 'foldColumn' / 'to2D' の結果を並べる先 (リスト・@V.Vector@・@U.Vector@)。
 class Collect t a where
   collectList :: [a] -> t a
 
@@ -390,10 +398,11 @@ adjustElemWith strict pos f g
 neighbors4 :: (GridOf k a) => Pos -> k a -> Ret k [(Pos, a)]
 neighbors4 pos g = primRun g $ \m -> mapM (\q -> (,) q <$> readAt m q) (neighborPos4 pos g)
 
--- | 行のリストにする。
+-- | 行を上から順に並べる。外側 @t@ も 1 行 @s@ も使い方から推論される
+-- (リスト・@V.Vector@・@U.Vector@)。
 {-# INLINE to2D #-}
-to2D :: (GridOf k a) => k a -> Ret k [[a]]
-to2D g = primRun g to2DM
+to2D :: forall t s k a. (GridOf k a, Collect s a, Collect t (s a)) => k a -> Ret k (t (s a))
+to2D g = primRun g $ \m -> collectList @t . map (collectList @s) <$> to2DM m
 
 -- | 転置。幅と高さが入れ替わる。
 {-# INLINE transposeGrid #-}
