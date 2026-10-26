@@ -10,8 +10,10 @@ library
                       , Atc.IO
                       , Atc.Grid
                       , Atc.Math
+                      , Atc.TwoPointers
     build-depends:      base >=4.17 && <5
                       , bytestring
+                      , containers
                       , primitive
                       , vector
                       , vector-algorithms
