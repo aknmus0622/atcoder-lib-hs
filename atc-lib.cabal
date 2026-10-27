@@ -8,6 +8,7 @@ library
     exposed-modules:    Atc
                       , Atc.Debug
                       , Atc.IO
+                      , Atc.Graph
                       , Atc.Grid
                       , Atc.Math
                       , Atc.TwoPointers
