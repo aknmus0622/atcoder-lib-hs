@@ -50,6 +50,7 @@ import Data.Ord (comparing)
 import Data.STRef (modifySTRef', newSTRef, readSTRef, writeSTRef)
 import qualified Data.Vector.Algorithms.Intro as Intro
 import qualified Data.Vector as V
+import qualified Data.Vector.Generic as G
 import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector.Unboxed.Mutable as UM
 
@@ -70,14 +71,14 @@ instance Show AtcGraph where
 -- 幅が 2 でも 3 でもなければ 'error'。
 --
 -- 頂点数は辺に出てくる最大の頂点番号。それより大きい番号の頂点は (辺がないので) 入らない。
-undirectedGraph :: Grid U.Vector Int -> AtcGraph
+undirectedGraph :: (G.Vector v Int) => Grid v Int -> AtcGraph
 undirectedGraph g = buildCSR (vertexCountOf es) (es U.++ U.map (\(u, v, c) -> (v, u, c)) es)
   where
     es = edgesOfGrid "undirectedGraph" g
 
 -- | 1 始まりの @u v@ / @u v w@ の並びから、@u@ から @v@ への有向グラフを作る。
 -- 頂点数は 'undirectedGraph' と同じく、辺に出てくる最大の頂点番号。
-directedGraph :: Grid U.Vector Int -> AtcGraph
+directedGraph :: (G.Vector v Int) => Grid v Int -> AtcGraph
 directedGraph g = buildCSR (vertexCountOf es) es
   where
     es = edgesOfGrid "directedGraph" g
@@ -87,13 +88,13 @@ directedGraph g = buildCSR (vertexCountOf es) es
 graphFromList :: Int -> [(Int, Int, Int)] -> AtcGraph
 graphFromList n es = buildCSR n (U.fromList es)
 
-edgesOfGrid :: String -> Grid U.Vector Int -> U.Vector (Int, Int, Int)
+edgesOfGrid :: (G.Vector v Int) => String -> Grid v Int -> U.Vector (Int, Int, Int)
 edgesOfGrid name (Grid w h d)
   | w == 2 = U.generate h (\i -> (at (2 * i) - 1, at (2 * i + 1) - 1, 1))
   | w == 3 = U.generate h (\i -> (at (3 * i) - 1, at (3 * i + 1) - 1, at (3 * i + 2)))
   | otherwise = error ("Atc.Graph." ++ name ++ ": 幅は 2 (u v) か 3 (u v w)")
   where
-    at = U.unsafeIndex d
+    at = G.unsafeIndex d
 
 -- | 0 始まりの辺に出てくる最大の頂点番号 + 1。辺がなければ 0。
 vertexCountOf :: U.Vector (Int, Int, Int) -> Int
@@ -270,12 +271,12 @@ dijkstraDistPrev g@(AtcGraph n _ tgt _) srcs = runST $ do
 
 -- | 'bfsDistPrev' / 'dijkstraDistPrev' の直前の頂点から、始点から @t@ までの経路。
 -- @t@ に届くときだけ使う (届かなければ @[t]@ になる)。
-pathTo :: U.Vector Int -> Int -> [Int]
+pathTo :: (G.Vector v Int) => v Int -> Int -> [Int]
 pathTo prev = go []
   where
     go acc v
       | v == -1 = acc
-      | otherwise = go (v : acc) (prev U.! v)
+      | otherwise = go (v : acc) (prev G.! v)
 
 -- | 負の重みがあってもよい距離。届かない頂点は 'Nothing'。
 -- @s@ から届く負の閉路があれば 'Nothing'。O(nm)。
@@ -501,11 +502,11 @@ articulationPoints g = [v | v <- [0 .. n - 1], cut U.! v || rootKids U.! v >= 2]
 
 -- | 成分を 1 頂点に縮める。成分をまたぐ辺だけを (重み付きのまま、多重辺もそのまま) 残す。
 -- 'splitComponents' / 'splitStrongComponents' / 'splitBridgeComponents' の 2 つ目を渡す。O(n + m)。
-condense :: U.Vector (Int, Int) -> AtcGraph -> AtcGraph
+condense :: (G.Vector v (Int, Int)) => v (Int, Int) -> AtcGraph -> AtcGraph
 condense loc g@(AtcGraph _ _ tgt wt) = buildCSR k (U.filter (\(a, b, _) -> a /= b) es)
   where
-    k = if U.null loc then 0 else 1 + U.maximum (U.map fst loc)
-    es = U.zipWith3 (\u v c -> (fst (loc U.! u), fst (loc U.! v), c)) (arcSources g) tgt wt
+    k = if G.null loc then 0 else 1 + G.foldl' (\x (c, _) -> max x c) 0 loc
+    es = U.zipWith3 (\u v c -> (fst (loc G.! u), fst (loc G.! v), c)) (arcSources g) tgt wt
 
 -- 各辺の出発点。
 arcSources :: AtcGraph -> U.Vector Int

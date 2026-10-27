@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 
 module Atc.IO where
@@ -7,6 +8,7 @@ import qualified Data.ByteString.Builder as B
 import qualified Data.ByteString.Char8 as C
 import Data.Char (isSpace)
 import Data.Maybe (fromJust)
+import qualified Data.Vector.Generic as G
 import qualified Data.Vector.Unboxed as U
 import System.IO (stdout)
 
@@ -45,11 +47,11 @@ getCharGrid w h = Grid w h . U.concat <$> mapM (const getRow) [1 .. h]
     getRow = (\line -> U.generate w (C.index line)) <$> C.getLine
 
 -- | 1 行ずつ、空白区切りで出力する。
-putIntGrid :: Grid U.Vector Int -> IO ()
+putIntGrid :: (G.Vector v Int) => Grid v Int -> IO ()
 putIntGrid g = B.hPutBuilder stdout (foldMap row (to2D g :: [[Int]]))
   where
     row xs = mconcat (zipWith (<>) (mempty : repeat (B.char7 ' ')) (map B.intDec xs)) <> B.char7 '\n'
 
 -- | 1 行ずつ、区切りなしで出力する。
-putCharGrid :: Grid U.Vector Char -> IO ()
+putCharGrid :: (G.Vector v Char) => Grid v Char -> IO ()
 putCharGrid g = B.hPutBuilder stdout (foldMap (\xs -> B.stringUtf8 xs <> B.char7 '\n') (to2D g :: [String]))
