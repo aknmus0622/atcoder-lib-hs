@@ -1,4 +1,4 @@
-module Atc (module Atc.Debug, module Atc.DP, module Atc.Graph, module Atc.Grid, module Atc.IO, module Atc.Math, module Atc.Memo, module Atc.TwoPointers) where
+module Atc (module Atc.Debug, module Atc.DP, module Atc.Graph, module Atc.Grid, module Atc.IO, module Atc.Math, module Atc.Memo, module Atc.TwoPointers, module Atc.UnionFind) where
 
 import Atc.Debug
 import Atc.DP
@@ -8,3 +8,4 @@ import Atc.IO
 import Atc.Math
 import Atc.Memo
 import Atc.TwoPointers
+import Atc.UnionFind
