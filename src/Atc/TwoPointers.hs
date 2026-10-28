@@ -30,7 +30,7 @@
 module Atc.TwoPointers where
 
 import Control.Monad.ST (runST)
-import qualified Data.IntMap.Strict as IM
+import qualified Data.IntMap.Strict as IntMapS
 import qualified Data.Vector as V
 import qualified Data.Vector.Generic as G
 import qualified Data.Vector.Mutable as MV
@@ -80,13 +80,13 @@ sumIf p = Window (+) (-) (\s -> if p s then Just s else Nothing) 0
 -- | 窓の種類数が @p@ を満たすか。値は種類数。O(log n)。
 {-# INLINE distinctIf #-}
 distinctIf :: (Int -> Bool) -> Window Int Int
-distinctIf p = Window add del check (P IM.empty 0)
+distinctIf p = Window add del check (P IntMapS.empty 0)
   where
-    -- 種類数は別に数える (IM.size は O(n))。
-    add (P m k) x = case IM.insertLookupWithKey (const (+)) x (1 :: Int) m of
+    -- 種類数は別に数える (IntMapS.size は O(n))。
+    add (P m k) x = case IntMapS.insertLookupWithKey (const (+)) x (1 :: Int) m of
       (Nothing, m') -> P m' (k + 1)
       (Just _, m') -> P m' k
-    del (P m k) x = case IM.updateLookupWithKey (\_ c -> if c == 1 then Nothing else Just (c - 1)) x m of
+    del (P m k) x = case IntMapS.updateLookupWithKey (\_ c -> if c == 1 then Nothing else Just (c - 1)) x m of
       (Just 1, m') -> P m' (k - 1)
       (_, m') -> P m' k
     check (P _ k) = if p k then Just k else Nothing

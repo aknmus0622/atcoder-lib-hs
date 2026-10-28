@@ -32,9 +32,9 @@ module Atc.Memo where
 
 import Control.Exception (evaluate)
 import Data.IORef
-import qualified Data.IntMap.Lazy as IM
+import qualified Data.IntMap.Lazy as IntMapL
 import Data.Ix (Ix, inRange, index, range, rangeSize)
-import qualified Data.Map.Lazy as M
+import qualified Data.Map.Lazy as MapL
 import qualified Data.Vector as V
 import System.IO.Unsafe (unsafePerformIO)
 
@@ -43,10 +43,10 @@ class MemoKey k where
   memo :: ((k -> v) -> k -> v) -> k -> v
 
 instance {-# OVERLAPPING #-} MemoKey Int where
-  memo = memoTable IM.empty IM.lookup IM.insert
+  memo = memoTable IntMapL.empty IntMapL.lookup IntMapL.insert
 
 instance {-# OVERLAPPABLE #-} (Ord k) => MemoKey k where
-  memo = memoTable M.empty M.lookup M.insert
+  memo = memoTable MapL.empty MapL.lookup MapL.insert
 
 -- 表は IORef に持つ。f が純粋なら外からは普通の関数と区別できない。
 -- インライン展開で表が複製されないよう NOINLINE にする。
