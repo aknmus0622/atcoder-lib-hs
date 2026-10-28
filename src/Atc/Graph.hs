@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RankNTypes #-}
 
 -- | 隣接リスト (CSR) のグラフと、その上の基本的なアルゴリズム。
