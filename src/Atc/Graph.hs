@@ -42,6 +42,7 @@
 module Atc.Graph where
 
 import Atc.Grid (Grid (..))
+import Atc.UnionFind (newUF, uniteUF)
 import Control.Monad (foldM, when)
 import Control.Monad.ST (ST, runST)
 import qualified Data.Foldable as F
@@ -345,6 +346,22 @@ rep n f = go 0
   where
     go !i = when (i < n) $ f i >> go (i + 1)
 {-# INLINE rep #-}
+
+-- ---------------------------------------------------------------------
+-- 最小全域木
+
+-- | 最小全域木 (Kruskal)。@(重みの合計, 使った辺 (u, v, 重み))@。O(m log m)。
+-- 辺は無向として扱う (有向グラフでも向きを無視する)。連結でなければ各成分の
+-- 最小全域木を合わせたもの (最小全域森) になるので、連結か調べるには
+-- 使った辺が @n - 1@ 本か見る。
+minimumSpanningTree :: AtcGraph -> (Int, [(Int, Int, Int)])
+minimumSpanningTree g = runST $ do
+  es <- U.thaw (U.fromList [e | e@(u, v, _) <- graphEdges g, u /= v])
+  Intro.sortBy (comparing (\(_, _, c) -> c)) es
+  sorted <- U.unsafeFreeze es
+  uf <- newUF (numVertices g)
+  used <- U.filterM (\(u, v, _) -> uniteUF u v uf) sorted
+  pure (U.sum (U.map (\(_, _, c) -> c) used), U.toList used)
 
 -- ---------------------------------------------------------------------
 -- 二部グラフ
