@@ -11,6 +11,7 @@ library
                       , Atc.Graph
                       , Atc.Grid
                       , Atc.Math
+                      , Atc.Memo
                       , Atc.TwoPointers
     build-depends:      base >=4.17 && <5
                       , bytestring
