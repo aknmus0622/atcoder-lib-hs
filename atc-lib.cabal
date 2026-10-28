@@ -7,6 +7,7 @@ library
     hs-source-dirs:     src
     exposed-modules:    Atc
                       , Atc.Debug
+                      , Atc.DP
                       , Atc.IO
                       , Atc.Graph
                       , Atc.Grid
