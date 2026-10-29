@@ -24,7 +24,8 @@
 -- > setElem p x g       Grid v a        m ()
 -- > adjustElem p f g    Grid v a        m ()
 -- > neighbors4 p g      [(Pos, a)]      m [(Pos, a)]
--- > to2D g              t (s a)         m (t (s a))
+-- > toRows g              t (s a)         m (t (s a))
+-- > flattenRow g        t a             m (t a)           (flattenColumn も同じ)
 -- > transposeGrid g     Grid v a        m (MGrid v m a)
 -- > mapGrid f g         Grid v b        m (MGrid v m b)   (imapGrid も同じ)
 -- > mapRow f g          Grid v b        m (MGrid v m b)   (imapRow / mapColumn / imapColumn も同じ)
@@ -56,9 +57,9 @@
 --
 -- 中身は @U.Vector@ (Int / Char / Bool など) か @V.Vector@ (それ以外)。
 --
--- > let g = from2D [[1, 2, 3], [4, 5, 6]] :: Grid U.Vector Int
+-- > let g = fromRows [[1, 2, 3], [4, 5, 6]] :: Grid U.Vector Int
 -- > getElem (1, 1) g                 -- Just 5
--- > to2D (setElem (1, 1) 99 g) :: [[Int]]   -- [[1,2,3],[4,99,6]]
+-- > toRows (setElem (1, 1) 99 g) :: [[Int]]   -- [[1,2,3],[4,99,6]]
 -- > neighbors4 (0, 1) g              -- [((1,1),5),((0,0),1),((0,2),3)]
 --
 -- 'setElem' / 'adjustElem' は 1 回ごとに全体をコピーする (O(HW))。
@@ -84,13 +85,18 @@
 -- > rowSum U.! r                            -- U.Vector になる
 -- > print (foldColumn' max 0 g :: [Int])    -- print だけだと決まらないので書く
 --
--- 'to2D' も同じで、外側 (行の並び) と内側 (1 行) をそれぞれ推論する。
+-- 'toRows' も同じで、外側 (行の並び) と内側 (1 行) をそれぞれ推論する。
 -- 内側はリスト・@V.Vector@・@U.Vector@、外側はリストか @V.Vector@
 -- (@U.Vector@ は中に Vector を入れられない)。
 --
--- > let rows = to2D g :: V.Vector (U.Vector Int)
+-- > let rows = toRows g :: V.Vector (U.Vector Int)
 -- > rows V.! r U.! c
--- > mapM_ print (to2D g :: [[Int]])
+-- > mapM_ print (toRows g :: [[Int]])
+--
+-- 'flattenRow' / 'flattenColumn' は 1 列に並べる。並べる先は 'toRows' と同じく推論される。
+--
+-- > flattenRow g :: [Int]              -- 行優先: 上の行から、各行は左から
+-- > flattenColumn g :: U.Vector Int    -- 列優先: 左の列から、各列は上から
 --
 -- == 全要素の畳み込み
 --
@@ -104,7 +110,7 @@
 -- @sum@ / @maximum@ / @toList@ / @elem@ / @length@ などがそのまま使える。
 -- @U.Vector@ は 'Foldable' にできない (要素に @Unbox@ が要る) ので、'foldGrid' を使う。
 --
--- > let g = from2D [[1, 2], [3, 4]] :: Grid V.Vector Int
+-- > let g = fromRows [[1, 2], [3, 4]] :: Grid V.Vector Int
 -- > sum g                            -- 10
 --
 -- == 可変版 'MGrid'
@@ -321,7 +327,7 @@ instance (PrimMonad m) => GridKind (MGrid v m) where
 -- | @k a@ がグリッドとして使える。共通関数の制約はこれ。
 type GridOf k a = (GridKind k, GridShape (k a), CanHold k a, GM.MVector (MutOf k) a)
 
--- | 'foldRow' / 'foldColumn' / 'to2D' の結果を並べる先 (リスト・@V.Vector@・@U.Vector@)。
+-- | 'foldRow' / 'foldColumn' / 'toRows' / 'flattenRow' / 'flattenColumn' の結果を並べる先 (リスト・@V.Vector@・@U.Vector@)。
 class Collect t a where
   collectList :: [a] -> t a
 
@@ -400,9 +406,22 @@ neighbors4 pos g = primRun g $ \m -> mapM (\q -> (,) q <$> readAt m q) (neighbor
 
 -- | 行を上から順に並べる。外側 @t@ も 1 行 @s@ も使い方から推論される
 -- (リスト・@V.Vector@・@U.Vector@)。
-{-# INLINE to2D #-}
-to2D :: forall t s k a. (GridOf k a, Collect s a, Collect t (s a)) => k a -> Ret k (t (s a))
-to2D g = primRun g $ \m -> collectList @t . map (collectList @s) <$> to2DM m
+{-# INLINE toRows #-}
+toRows :: forall t s k a. (GridOf k a, Collect s a, Collect t (s a)) => k a -> Ret k (t (s a))
+toRows g = primRun g $ \m -> collectList @t . map (collectList @s) <$> toRowsM m
+
+-- | 行優先 (上の行から、各行は左から) に 1 列に並べる。並べる先 @t@ は使い方から推論される
+-- (リスト・@V.Vector@・@U.Vector@)。
+{-# INLINE flattenRow #-}
+flattenRow :: forall t k a. (GridOf k a, Collect t a) => k a -> Ret k (t a)
+flattenRow g = primRun g $ \(MGrid w h d) ->
+  collectList @t <$> mapM (GM.unsafeRead d) [0 .. w * h - 1]
+
+-- | 列優先 (左の列から、各列は上から) に 1 列に並べる。並べる先は 'flattenRow' と同じ。
+{-# INLINE flattenColumn #-}
+flattenColumn :: forall t k a. (GridOf k a, Collect t a) => k a -> Ret k (t a)
+flattenColumn g = primRun g $ \(MGrid w h d) ->
+  collectList @t <$> sequence [GM.unsafeRead d (r * w + c) | c <- [0 .. w - 1], r <- [0 .. h - 1]]
 
 -- | 転置。幅と高さが入れ替わる。
 {-# INLINE transposeGrid #-}
@@ -543,9 +562,9 @@ writeWith strict d i x
   | otherwise = GM.unsafeWrite d i x
 {-# INLINE writeWith #-}
 
-to2DM :: (PrimMonad n, GM.MVector v a) => MGrid v n a -> n [[a]]
-to2DM (MGrid w h d) = forM [0 .. h - 1] $ \r -> mapM (\c -> GM.unsafeRead d (r * w + c)) [0 .. w - 1]
-{-# INLINABLE to2DM #-}
+toRowsM :: (PrimMonad n, GM.MVector v a) => MGrid v n a -> n [[a]]
+toRowsM (MGrid w h d) = forM [0 .. h - 1] $ \r -> mapM (\c -> GM.unsafeRead d (r * w + c)) [0 .. w - 1]
+{-# INLINABLE toRowsM #-}
 
 transposeM :: (PrimMonad n, GM.MVector v a) => MGrid v n a -> n (MGrid v n a)
 transposeM (MGrid w h d) = do
@@ -665,20 +684,29 @@ foldColumnM strict f z (MGrid w h d) = do
 -- 作る・変換する
 
 -- | 行のリストから作る。行の長さが揃っていなければ 'error'。
-from2D :: (G.Vector v a) => [[a]] -> Grid v a
-from2D [] = Grid 0 0 G.empty
-from2D rows@(row : _)
+fromRows :: (G.Vector v a) => [[a]] -> Grid v a
+fromRows [] = Grid 0 0 G.empty
+fromRows rows@(row : _)
   | all ((== w) . length) rows = Grid w (length rows) (G.fromList (concat rows))
-  | otherwise = error "Atc.Grid.from2D: 行の長さが揃っていません"
+  | otherwise = error "Atc.Grid.fromRows: 行の長さが揃っていません"
   where
     w = length row
 
--- | 行優先に並んだ 1 次元リストから、幅 @w@ 高さ @h@ で作る。
--- 長さが @w * h@ でなければ 'error'。
-from1D :: (G.Vector v a) => Int -> Int -> [a] -> Grid v a
-from1D w h xs
+-- | 行優先 (上の行から、各行は左から) に並んだリストから、幅 @w@ 高さ @h@ で作る。
+-- 'flattenRow' の逆。長さが @w * h@ でなければ 'error'。
+unflattenRow :: (G.Vector v a) => Int -> Int -> [a] -> Grid v a
+unflattenRow w h xs
   | length xs == w * h = Grid w h (G.fromListN (w * h) xs)
-  | otherwise = error "Atc.Grid.from1D: 要素数が width * height と一致しません"
+  | otherwise = error "Atc.Grid.unflattenRow: 要素数が width * height と一致しません"
+
+-- | 列優先 (左の列から、各列は上から) に並んだリストから、幅 @w@ 高さ @h@ で作る。
+-- 'flattenColumn' の逆。長さが @w * h@ でなければ 'error'。
+unflattenColumn :: (G.Vector v a) => Int -> Int -> [a] -> Grid v a
+unflattenColumn w h xs
+  | length xs == w * h = Grid w h (G.generate (w * h) (\i -> let (r, c) = i `divMod` w in V.unsafeIndex cs (c * h + r)))
+  | otherwise = error "Atc.Grid.unflattenColumn: 要素数が width * height と一致しません"
+  where
+    cs = V.fromListN (w * h) xs
 
 -- | 幅 @w@ 高さ @h@ で、全マスを @x@ で埋めて作る。
 newMGrid :: (PrimMonad m, GM.MVector v a) => Int -> Int -> a -> m (MGrid v m a)

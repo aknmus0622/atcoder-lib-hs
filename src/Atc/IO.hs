@@ -3,7 +3,7 @@
 
 module Atc.IO where
 
-import Atc.Grid (Grid (..), to2D)
+import Atc.Grid (Grid (..), toRows)
 import qualified Data.ByteString.Builder as B
 import qualified Data.ByteString.Char8 as C
 import Data.Char (isSpace)
@@ -48,10 +48,10 @@ getCharGrid w h = Grid w h . U.concat <$> mapM (const getRow) [1 .. h]
 
 -- | 1 行ずつ、空白区切りで出力する。
 putIntGrid :: (G.Vector v Int) => Grid v Int -> IO ()
-putIntGrid g = B.hPutBuilder stdout (foldMap row (to2D g :: [[Int]]))
+putIntGrid g = B.hPutBuilder stdout (foldMap row (toRows g :: [[Int]]))
   where
     row xs = mconcat (zipWith (<>) (mempty : repeat (B.char7 ' ')) (map B.intDec xs)) <> B.char7 '\n'
 
 -- | 1 行ずつ、区切りなしで出力する。
 putCharGrid :: (G.Vector v Char) => Grid v Char -> IO ()
-putCharGrid g = B.hPutBuilder stdout (foldMap (\xs -> B.stringUtf8 xs <> B.char7 '\n') (to2D g :: [String]))
+putCharGrid g = B.hPutBuilder stdout (foldMap (\xs -> B.stringUtf8 xs <> B.char7 '\n') (toRows g :: [String]))
