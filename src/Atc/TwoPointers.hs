@@ -27,6 +27,10 @@
 --
 -- 添字が要るときは @slideWindow w (U.indexed as)@ のように組で渡し、
 -- 'premap' で取り出す。
+--
+-- 'slideWindow' の値は遅延したまま返るので、@fmap@ や @\<*\>@ で作った値は
+-- 窓の状態 (種類数なら IntMap) を抱えたサンクになる。全部の値を使うなら
+-- 書き込み時に WHNF まで評価する 'slideWindow'' を使う。
 module Atc.TwoPointers where
 
 import Control.Monad.ST (runST)
@@ -95,7 +99,18 @@ distinctIf p = Window add del check (P IntMapS.empty 0)
 -- 足す・判定は高々 @2n@ 回、除くは @n@ 回、除いた後の判定が @n@ 回。
 {-# INLINE slideWindow #-}
 slideWindow :: (G.Vector v a) => Window a b -> v a -> V.Vector (Maybe b)
-slideWindow (Window add del check s0) xs = runST $ do
+slideWindow = slideCore False
+
+-- | 'slideWindow' の正格版。値は書き込み時に WHNF まで評価する
+-- (タプルの中身までは評価しないので、要るなら @fmap@ で正格な型にする)。
+{-# INLINE slideWindow' #-}
+slideWindow' :: (G.Vector v a) => Window a b -> v a -> V.Vector (Maybe b)
+slideWindow' = slideCore True
+
+-- 第 1 引数が True なら値を WHNF まで評価してから書き込む。
+{-# INLINE slideCore #-}
+slideCore :: (G.Vector v a) => Bool -> Window a b -> v a -> V.Vector (Maybe b)
+slideCore strict (Window add del check s0) xs = runST $ do
   out <- MV.unsafeNew n
   -- cur は窓 [l, r) の値 (空の窓なら Nothing)。
   let go !l !r !s !cur
@@ -105,7 +120,9 @@ slideWindow (Window add del check s0) xs = runST $ do
         , Just b <- check s' =
             go l (r + 1) s' (Just b)
         | otherwise = do
-            MV.unsafeWrite out l cur
+            case cur of
+              Just b | strict -> b `seq` MV.unsafeWrite out l cur
+              _ -> MV.unsafeWrite out l cur
             if l < r
               then do
                 let s' = del s (G.unsafeIndex xs l)
