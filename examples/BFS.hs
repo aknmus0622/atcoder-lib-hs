@@ -46,18 +46,20 @@ graphDist = do
 
 -- | 0-1 BFS: 壁を壊して進む (ABC213 E)。
 --
--- 'relaxQ' は値が良くなったときだけ書き、今の値と同じなら先頭、増えたなら末尾に積む。
+-- 'updateQ' で、値が良くなったときだけ書く。コスト 0 なら先頭、1 なら末尾に積む。
 -- 通路へはコスト 0、パンチ (2x2 を壊す = 周囲 5x5 の角以外) はコスト 1。
 strongerTakahashi :: IO ()
 strongerTakahashi = do
   [h, w] <- ints
   g <- getCharGrid w h
-  let (_, dist) = runBFS (dense ((0, 0), (h - 1, w - 1))) $ do
-        relaxQ (0, 0) (0 :: Int)
+  let relax q x end = void $ updateQ q $ \old ->
+        if maybe True (x <) old then Just (x, end) else Nothing
+      (_, dist) = runBFS (dense ((0, 0), (h - 1, w - 1))) $ do
+        visitQ (0, 0) (0 :: Int)
         whileQ $ \p@(i, j) d -> do
-          forM_ (around4 p) $ \q -> when (inGrid q g && elemAt q g == '.') $ relaxQ q d
+          forM_ (around4 p) $ \q -> when (inGrid q g && elemAt q g == '.') $ relax q d PushFront
           forM_ [(i + di, j + dj) | di <- [-2 .. 2], dj <- [-2 .. 2], abs di + abs dj < 4] $ \q ->
-            relaxQ q (d + 1)
+            relax q (d + 1) PushBack
   print (fromMaybe (-1) (dist (h - 1, w - 1)))
 
 -- | 状態を足した BFS: 鍵を拾うと開く扉のある迷路。
@@ -97,7 +99,8 @@ shortestPath = do
 
 -- | 最短経路の数 (ABC211 D)。
 --
--- 値を @(距離, 数)@ にする。'visitQ' が 'False' (訪問済み) で距離が @d + 1@ なら数を足す。
+-- 値を @(距離, 数)@ にする。'updateQ' で、未訪問なら末尾に積み、
+-- 訪問済みで距離が @d + 1@ なら数を足すだけ ('NoPush')。
 -- FIFO なので、取り出した時点で数は確定している。
 countShortest :: IO ()
 countShortest = do
@@ -107,10 +110,11 @@ countShortest = do
       md = 10 ^ (9 :: Int) + 7
       (_, tbl) = runBFS (dense (0, n - 1)) $ do
         visitQ 0 (0 :: Int, 1 :: Int)
-        whileQ $ \v (d, c) -> U.forM_ (adjacentVertices g v) $ \u -> do
-          new <- visitQ u (d + 1, c)
-          unless new $ modifyValue u $ \(d', c') ->
-            if d' == d + 1 then (d', (c' + c) `mod` md) else (d', c')
+        whileQ $ \v (d, c) -> U.forM_ (adjacentVertices g v) $ \u ->
+          updateQ u $ \old -> case old of
+            Nothing -> Just ((d + 1, c), PushBack)
+            Just (d', c') | d' == d + 1 -> Just ((d', (c' + c) `mod` md), NoPush)
+            _ -> Nothing
   print (maybe 0 snd (tbl (n - 1)))
 
 -- | 連結成分: 値を成分番号にして、未訪問の頂点から何度でも始める。

@@ -32,13 +32,16 @@
 -- 探索の仕方は本体で使う操作で決まる:
 --
 -- * 普通の BFS: 'visitQ' (初めてのキーだけ値を書いて末尾に積む)。
--- * 0-1 BFS: 'relaxQ' (値が良くなれば更新。今取り出している値以下なら先頭、ほかは末尾に積む)。
+-- * 書き換えの条件・積む位置を自分で決める: 'updateQ'。今の値 (未訪問なら 'Nothing') から
+--   新しい値と積む位置 ('PushFront' / 'PushBack' / 'NoPush') を返す。
+--   0-1 BFS (コスト 0 なら先頭、1 なら末尾)、同じ距離どうしの足し込み、
+--   距離が同じ中での 2 番目の基準の改善などを 1 回で書ける。
 -- * 最短経路の数え上げなど: 'visitQ' が 'False' のとき 'modifyValue' で足し込む。
 --   FIFO なので、取り出した時点の値は確定している。
 -- * 連結成分: 本体で始点を何度でも積める。'valueOf' で未訪問を確かめて始める。
 -- * 早期終了: 'whileQ' の代わりに 'pullQ' で自分で回し、ゴールで戻り値を返す。
 --
--- 同じキーは 2 回取り出さない (0-1 BFS で古くなった要素は読み飛ばす)。
+-- 同じキーは 2 回取り出さない (0-1 BFS などで古くなった要素は読み飛ばす)。
 -- 取り出した順は 'orderQ' で取れる (木の BFS 順で葉から DP するときなど)。
 --
 -- 値は書き込み時に WHNF まで評価する。値の型が決まらないとコンパイルエラーになるので、
@@ -242,7 +245,7 @@ data Env s k a = Env
     -- 両端キュー (リングバッファ) と、取り出した順
     envQue :: !(STRef s (UM.MVector s Int)),
     envOrd :: !(STRef s (UM.MVector s Int)),
-    -- 0: キューの先頭, 1: キューの要素数, 2: 取り出した数, 3: 今取り出している添字 (なければ -1)
+    -- 0: キューの先頭, 1: キューの要素数, 2: 取り出した数
     envReg :: !(UM.MVector s Int)
   }
 
@@ -292,7 +295,7 @@ newEnv sp = do
     <$> newSTRef arr
     <*> (UM.unsafeNew (n + 1) >>= newSTRef)
     <*> (UM.unsafeNew n >>= newSTRef)
-    <*> U.thaw (U.fromListN 4 [0, 0, 0, -1])
+    <*> U.thaw (U.fromListN 3 [0, 0, 0])
 
 {-# INLINE freezeEnv #-}
 freezeEnv :: forall s k a. (BFSKey k, DPValue a) => Env s k a -> ST s (k -> Maybe a)
@@ -382,25 +385,47 @@ visitQ k x = BFS $ \e -> do
           pushBack e i
           pure True
 
--- | 0-1 BFS の更新。値がないか @x@ が今の値より小さければ書いて積む。
--- @x@ が今取り出しているキーの値以下なら先頭 (コスト 0)、ほかは末尾 (コスト 1) に積む。
--- 'whileQ' の外 (始点) では末尾に積む。取り出し済みのキーは更新しない。
-{-# INLINE relaxQ #-}
-relaxQ :: (BFSKey k, DPValue a, Ord a) => k -> a -> BFS s k a ()
-relaxQ k x = BFS $ \e -> do
+-- | 'updateQ' で書いた値をどこに積むか。
+data Push
+  = -- | 先頭 (0-1 BFS のコスト 0)
+    PushFront
+  | -- | 末尾
+    PushBack
+  | -- | 値だけ書き、積まない
+    NoPush
+  deriving (Eq, Show)
+
+-- | 今の値 (未訪問なら 'Nothing') を渡し、@Just (新しい値, 積む位置)@ なら書いて積む。
+-- 'Nothing' なら何もしない。書いたら 'True'。範囲外・取り出し済みのキーは関数を呼ばずに 'False'。
+--
+-- > -- 0-1 BFS: コスト c (0 か 1) の辺
+-- > updateQ q $ \old -> if maybe True (d + c <) old
+-- >   then Just (d + c, if c == 0 then PushFront else PushBack) else Nothing
+--
+-- 既にキューにいるキーをまた積むと 2 回入るが、後の方は取り出すときに読み飛ばす。
+-- 未訪問のキーに 'NoPush' で書くと、訪問済みだが取り出されないキーになる ('writeValue' と同じ)。
+{-# INLINE updateQ #-}
+updateQ :: (BFSKey k, DPValue a) => k -> (Maybe a -> Maybe (a, Push)) -> BFS s k a Bool
+updateQ k g = BFS $ \e -> do
   i <- indexOf True e k
-  when (i >= 0) $ do
-    f <- readFlag e i
-    better <- case f of
-      0 -> pure True
-      1 -> (x <) <$> readVal e i
-      _ -> pure False
-    when better $ do
-      writeFlag e i 1
-      writeVal e i x
-      c <- UM.unsafeRead (envReg e) 3
-      front <- if c < 0 then pure False else (x <=) <$> readVal e c
-      if front then pushFront e i else pushBack e i
+  if i < 0
+    then pure False
+    else do
+      f <- readFlag e i
+      if f == 2
+        then pure False
+        else do
+          old <- if f == 0 then pure Nothing else Just <$> readVal e i
+          case g old of
+            Nothing -> pure False
+            Just (x, p) -> do
+              writeFlag e i 1
+              writeVal e i x
+              case p of
+                PushFront -> pushFront e i
+                PushBack -> pushBack e i
+                NoPush -> pure ()
+              pure True
 
 -- 先頭を取り出して、キーと値を k に渡す。空なら z。
 {-# INLINE pullWith #-}
@@ -419,7 +444,6 @@ pullWith e z k = go
             else do
               writeFlag e i 2
               pushOrder e i
-              UM.unsafeWrite (envReg e) 3 i
               x <- readVal e i
               key <- keyOf e i
               k key x
