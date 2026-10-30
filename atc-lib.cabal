@@ -6,6 +6,7 @@ build-type:         Simple
 library
     hs-source-dirs:     src
     exposed-modules:    Atc
+                      , Atc.BFS
                       , Atc.Debug
                       , Atc.DP
                       , Atc.IO
