@@ -12,6 +12,7 @@ library
                       , Atc.DP
                       , Atc.IO
                       , Atc.Graph
+                      , Atc.Graph.Functional
                       , Atc.Grid
                       , Atc.Math
                       , Atc.Memo
