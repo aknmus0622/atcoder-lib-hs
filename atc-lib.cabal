@@ -14,6 +14,7 @@ library
                       , Atc.Graph
                       , Atc.Graph.Functional
                       , Atc.Grid
+                      , Atc.JumpTable
                       , Atc.Math
                       , Atc.Memo
                       , Atc.TwoPointers

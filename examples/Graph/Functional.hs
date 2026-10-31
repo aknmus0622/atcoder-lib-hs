@@ -41,6 +41,14 @@ puttingCandies = do
       then pre U.! k
       else pre U.! t + q * (pre U.! (t + c) - pre U.! t) + (pre U.! (t + r) - pre U.! t)
 
+-- | 同じ問題を辺の重みの表で: 'weightedJumpTableFG' と 'foldJT'。
+puttingCandiesTable :: IO ()
+puttingCandiesTable = do
+  [n, k] <- ints
+  a <- ints
+  let g = graphFromList n [(i, (i + x) `mod` n, x) | (i, x) <- zip [0 ..] a]
+  print (snd (foldJT (+) 0 (weightedJumpTableFG (+) g k) 0 k))
+
 -- | 閉路の長さと頂点を出す (ABC311 C)。
 oneCycle :: IO ()
 oneCycle = do

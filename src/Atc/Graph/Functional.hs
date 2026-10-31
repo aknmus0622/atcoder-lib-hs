@@ -22,7 +22,9 @@
 -- * 始点が 1 つなら 'walkFG'。1 回 O(n) で、@k@ がいくら大きくても変わらない。
 -- * 始点が複数なら 'jumpTableFG' で表を作って 'jumpFG'。表は O(n log K)、1 回 O(log K)。
 --
--- 経路上の和は、'rhoFG' の経路の累積和と周期から求める。
+-- 経路上の和は、'weightedJumpTableFG' で辺の重みの表を作って 'foldJT' で求める。
+-- 始点が 1 つなら、'rhoFG' の経路の累積和と周期からも求められる。
+-- 表の中身は "Atc.JumpTable" で、'climbJT' などもそのまま使える。
 --
 -- == 閉路と木
 --
@@ -32,9 +34,9 @@
 module Atc.Graph.Functional where
 
 import Atc.Graph
+import Atc.JumpTable
 import Control.Monad (foldM)
 import Control.Monad.ST (runST)
-import Data.Bits (countLeadingZeros, finiteBitSize, shiftR, testBit)
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector.Unboxed.Mutable as UM
@@ -58,27 +60,19 @@ nextVerticesFG g = case filter (\v -> outDegree g v /= 1) [0 .. n - 1] of
 -- ---------------------------------------------------------------------
 -- K 回先の頂点
 
--- | ダブリングの表。@i@ 段目は @2 ^ i@ 回進んだ先。
-newtype JumpTable = JumpTable (V.Vector (U.Vector Int))
-
 -- | @k <= maxK@ の 'jumpFG' に使える表を作る。O(n log maxK)。
-jumpTableFG :: AtcGraph -> Int -> JumpTable
-jumpTableFG g maxK
-  | maxK < 0 = error "jumpTableFG: maxK が負"
-  | otherwise = JumpTable (V.iterateN levels (\r -> U.backpermute r r) (nextVerticesFG g))
-  where
-    levels = finiteBitSize maxK - countLeadingZeros maxK
+jumpTableFG :: AtcGraph -> Int -> JumpTable U.Vector ()
+jumpTableFG g maxK = buildJT (\_ _ -> ()) maxK (nextVerticesFG g) (U.replicate (numVertices g) ())
+
+-- | 辺の重みを @merge@ で合成する表を作る。'foldJT' / 'climbJT' で経路上の値を求める。
+-- O(n log maxK)。
+weightedJumpTableFG :: (Int -> Int -> Int) -> AtcGraph -> Int -> JumpTable U.Vector Int
+weightedJumpTableFG merge g maxK =
+  buildJT merge maxK (nextVerticesFG g) (U.generate (numVertices g) (U.head . adjacentWeights g))
 
 -- | 頂点 @v@ から @k@ 回進んだ頂点。O(log k)。@k@ が表の範囲を超えると 'error'。
-jumpFG :: JumpTable -> Int -> Int -> Int
-jumpFG (JumpTable rows) v0 k0
-  | k0 < 0 || (k0 `shiftR` V.length rows) /= 0 = error ("jumpFG: k が範囲外: " ++ show k0)
-  | otherwise = go 0 v0
-  where
-    go !i !v
-      | i >= V.length rows = v
-      | testBit k0 i = go (i + 1) (V.unsafeIndex rows i U.! v)
-      | otherwise = go (i + 1) v
+jumpFG :: JumpTable v w -> Int -> Int -> Int
+jumpFG = jumpJT
 
 -- | 頂点 @v@ からの経路 @(path, t, c)@。O(n)。
 --
