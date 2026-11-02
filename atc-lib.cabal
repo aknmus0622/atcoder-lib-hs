@@ -18,6 +18,7 @@ library
                       , Atc.JumpTable
                       , Atc.Math
                       , Atc.Memo
+                      , Atc.MonoStack
                       , Atc.TwoPointers
                       , Atc.UnionFind
     build-depends:      base >=4.17 && <5
