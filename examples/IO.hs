@@ -25,14 +25,14 @@ parse = do
 readIntGrid :: IO ()
 readIntGrid = do
   [h, w] <- map readBS . C.words <$> C.getLine
-  g <- getIntGrid w h
+  g <- getIntGrid w h :: IO (Grid U.Vector Int)
   putIntGrid (mapGrid (* 2) g)
 
 -- | @#.#@ のような区切りなしのマス目を読んで、そのまま書き戻す。
 readCharGrid :: IO ()
 readCharGrid = do
   [h, w] <- map readBS . C.words <$> C.getLine
-  g <- getCharGrid w h
+  g <- getCharGrid w h :: IO (Grid U.Vector Char)
   putCharGrid (mapGrid (\c -> if c == '#' then '.' else '#') g)
 
 -- | 読んだグリッドを数えあげる。
@@ -41,7 +41,7 @@ readCharGrid = do
 countWalls :: IO ()
 countWalls = do
   [h, w] <- map readBS . C.words <$> C.getLine
-  g <- getCharGrid w h
+  g <- getCharGrid w h :: IO (Grid U.Vector Char)
   print (foldGrid' (\acc c -> if c == '#' then acc + 1 else acc) (0 :: Int) g)
 
 -- | 出力は 'putIntGrid' に任せる。

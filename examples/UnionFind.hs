@@ -145,7 +145,7 @@ bothWeightAndValue = do
 fromEdges :: IO ()
 fromEdges = do
   [n, m] <- ints
-  es <- getIntGrid 2 m
+  es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
   let uf = buildUF n es
   putStrLn (unwords [show (sizeUF v uf) | v <- [0 .. n - 1]])
   print (countUF uf)
@@ -156,7 +156,7 @@ fromEdges = do
 fromWeightedEdges :: IO ()
 fromWeightedEdges = do
   [n, m] <- ints
-  es <- getIntGrid 3 m
+  es <- getIntGrid 3 m :: IO (Grid U.Vector Int)
   case buildWUF n es of
     Nothing -> putStrLn "No"
     Just uf -> print (diffUF 0 (n - 1) uf)

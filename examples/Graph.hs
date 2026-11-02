@@ -18,7 +18,7 @@ import Input (ints)
 readUndirected :: IO AtcGraph
 readUndirected = do
   [_, m] <- ints
-  es <- getIntGrid 2 m
+  es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
   pure (undirectedGraph es)
 
 -- | 有向グラフを読む (重み付き)。
@@ -27,7 +27,7 @@ readUndirected = do
 readDirected :: IO AtcGraph
 readDirected = do
   [_, m] <- ints
-  es <- getIntGrid 3 m
+  es <- getIntGrid 3 m :: IO (Grid U.Vector Int)
   pure (directedGraph es)
 
 -- | 0 始まりの辺を自分で組み立てる: 'graphFromList'。
@@ -103,7 +103,7 @@ bfsWithPath = do
 bfsWithoutGraph :: IO ()
 bfsWithoutGraph = do
   [h, w] <- ints
-  g <- getCharGrid w h
+  g <- getCharGrid w h :: IO (Grid U.Vector Char)
   let next i =
         let (r, c) = indexToPos w i
          in [posToIndex w q | (q, x) <- neighbors4 (r, c) g, x /= '#']
@@ -291,7 +291,7 @@ conditionalComponents = do
 edgeList :: IO ()
 edgeList = do
   [n, m] <- ints
-  es <- getIntGrid 2 m
+  es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
   let arcs' = edgesOfGrid "edgeList" es
   print (U.toList arcs')
   print (vertexCountOf arcs') -- 辺に出てくる最大の番号 + 1

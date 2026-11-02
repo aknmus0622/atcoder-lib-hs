@@ -13,7 +13,7 @@
 -- 入力の頂点番号は 1 始まりとして、1 を引いて取り込む。
 --
 -- > [n, m] <- getInts
--- > es <- getIntGrid 2 m            -- 重み付きなら getIntGrid 3 m
+-- > es <- getIntGrid 2 m :: IO (Grid U.Vector Int)   -- 重み付きなら getIntGrid 3 m
 -- > let g = undirectedGraph es      -- 有向なら directedGraph
 --
 -- 頂点数は辺に出てくる最大の頂点番号になる。番号の大きい頂点が孤立しうる

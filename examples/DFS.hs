@@ -19,7 +19,7 @@ import Input (ints)
 floodFill :: IO ()
 floodFill = do
   [h, w] <- ints
-  g <- getCharGrid w h
+  g <- getCharGrid w h :: IO (Grid U.Vector Char)
   let s = head [p | p <- range2 h w, elemAt p g == 's']
       t = head [p | p <- range2 h w, elemAt p g == 'g']
       (_, seen) = runDFS (dense ((0, 0), (h - 1, w - 1))) $ do
@@ -36,7 +36,7 @@ floodFill = do
 subtreeSizes :: IO ()
 subtreeSizes = do
   n <- head <$> ints
-  es <- getIntGrid 2 (n - 1)
+  es <- getIntGrid 2 (n - 1) :: IO (Grid U.Vector Int)
   let g = undirectedGraph es
       (_, size) = runDFS (dense (0, n - 1)) $ do
         let go v = visitS v (1 :: Int) $ U.forM_ (adjacentVertices g v) $ \u -> do
@@ -51,7 +51,7 @@ subtreeSizes = do
 topoOrCycle :: IO ()
 topoOrCycle = do
   [n, m] <- ints
-  es <- getIntGrid 2 m
+  es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
   let g = directedGraph es
       ((cyc, post), _) = runDFS (dense (0, n - 1)) $ do
         bad <- liftST (UM.replicate 1 False)
@@ -71,7 +71,7 @@ topoOrCycle = do
 eulerTour :: IO ()
 eulerTour = do
   n <- head <$> ints
-  es <- getIntGrid 2 (n - 1)
+  es <- getIntGrid 2 (n - 1) :: IO (Grid U.Vector Int)
   let g = undirectedGraph es
       (tout, tin) = runDFS (dense (0, n - 1)) $ do
         clock <- liftST (UM.replicate 1 (0 :: Int))
@@ -93,7 +93,7 @@ eulerTour = do
 countPaths :: IO ()
 countPaths = do
   [n, m] <- ints
-  es <- getIntGrid 2 m
+  es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
   let g = undirectedGraph es
       lim = 10 ^ (6 :: Int) :: Int
       (ans, _) = runDFS (dense (0, n - 1)) $ do

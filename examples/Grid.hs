@@ -52,7 +52,7 @@ fromFlat = do
 neighborhood :: IO ()
 neighborhood = do
   [h, w] <- ints
-  g <- getCharGrid w h
+  g <- getCharGrid w h :: IO (Grid U.Vector Char)
   print (inGrid (0, 0) g)
   print (neighborPos4 (0, 0) g) -- 範囲内の座標だけ
   print (neighbors4 (0, 0) g) -- 座標と値の組
@@ -75,7 +75,7 @@ write = do
 transform :: IO ()
 transform = do
   [h, w] <- ints
-  g <- getCharGrid w h
+  g <- getCharGrid w h :: IO (Grid U.Vector Char)
   print (mapGrid (== '#') g) -- Grid U.Vector Bool
   print (mapGrid' (== '#') g)
   print (imapGrid (\(r, c) x -> if even (r + c) then x else '.') g)
@@ -105,7 +105,7 @@ rowsAndColumns = do
 cumulativeSum :: IO ()
 cumulativeSum = do
   [h, w] <- ints
-  g <- getIntGrid w h
+  g <- getIntGrid w h :: IO (Grid U.Vector Int)
   let s = scanColumn' (+) 0 (scanRow' (+) 0 g)
   -- 長方形 [(r1, c1), (r2, c2)) の和
   let area (r1, c1) (r2, c2) =
@@ -121,7 +121,7 @@ cumulativeSum = do
 foldLines :: IO ()
 foldLines = do
   [h, w] <- ints
-  g <- getIntGrid w h
+  g <- getIntGrid w h :: IO (Grid U.Vector Int)
   print (foldRow' (+) 0 g :: [Int]) -- 各行の和
   print (foldRow (+) 0 g :: U.Vector Int)
   print (foldColumn' (+) 0 g :: [Int]) -- 各列の和
@@ -134,7 +134,7 @@ foldLines = do
 foldAll :: IO ()
 foldAll = do
   [h, w] <- ints
-  g <- getCharGrid w h
+  g <- getCharGrid w h :: IO (Grid U.Vector Char)
   print (foldGrid' (\acc c -> if c == '#' then acc + 1 else acc) (0 :: Int) g)
   print (foldGrid (flip (:)) [] g)
   let v = fromRows [[1, 2], [3, 4]] :: Grid V.Vector Int
@@ -146,7 +146,7 @@ foldAll = do
 reshape :: IO ()
 reshape = do
   [h, w] <- ints
-  g <- getCharGrid w h
+  g <- getCharGrid w h :: IO (Grid U.Vector Char)
   print (toRows g :: [String])
   print (toRows g :: V.Vector (U.Vector Char))
   print (flattenRow g :: [Char]) -- 行優先
@@ -194,7 +194,7 @@ mutableInIO = do
 thawAndFreeze :: IO ()
 thawAndFreeze = do
   [h, w] <- ints
-  g <- getIntGrid w h
+  g <- getIntGrid w h :: IO (Grid U.Vector Int)
   m <- thawGrid g
   forM_ [0 .. h - 1] $ \r -> adjustElem' (r, 0) (* 2) m
   back <- freezeGrid m
