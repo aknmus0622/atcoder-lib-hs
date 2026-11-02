@@ -33,12 +33,12 @@ readDirected = do
 -- | 0 始まりの辺を自分で組み立てる: 'graphFromList'。
 --
 -- 頂点数を渡せるので、孤立した頂点があっても困らない。無向にしたいなら
--- 両向きを入れる。
+-- 'undirectedGraphFromList' に片方の向きだけ渡す。
 buildByHand :: IO ()
 buildByHand = do
   [n, m] <- ints
   es <- mapM (const ((\[a, b, w] -> (a - 1, b - 1, w)) <$> ints)) [1 .. m]
-  let g = graphFromList n (es ++ [(v, u, w) | (u, v, w) <- es])
+  let g = undirectedGraphFromList n es
   print (numVertices g)
 
 -- | グラフを覗く: 次数と隣接。

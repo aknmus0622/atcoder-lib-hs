@@ -17,8 +17,11 @@
 -- > let g = undirectedGraph es      -- 有向なら directedGraph
 --
 -- 頂点数は辺に出てくる最大の頂点番号になる。番号の大きい頂点が孤立しうる
--- (辺が 1 本もない頂点がある) ときは、頂点数を渡せる 'graphFromList' を使う。
--- 0 始まりの頂点番号や、自分で組み立てた辺も 'graphFromList' に (有向で) 渡す。
+-- (辺が 1 本もない頂点がある) ときは、頂点数を渡せる 'graphFromList' (有向) や
+-- 'undirectedGraphFromList' (無向) を使う。0 始まりの頂点番号や、自分で組み立てた辺も
+-- これらに渡す。
+--
+-- グラフは有向か無向かを覚えている ('graphDirection')。"Atc.Graph.Cycle" はこれを見て動く。
 --
 -- == 結果の読み方
 --
@@ -59,9 +62,12 @@ import qualified Data.Vector.Unboxed.Mutable as UM
 -- ---------------------------------------------------------------------
 -- 型
 
--- | 頂点数・各頂点の辺の開始位置 (長さ n + 1)・行き先・重み。
+-- | 作るときに決まるグラフの向き。
+data Direction = Directed | Undirected deriving (Eq, Show)
+
+-- | 頂点数・各頂点の辺の開始位置 (長さ n + 1)・行き先・重み・向き。
 -- 頂点 @v@ の辺は @[off ! v, off ! (v + 1))@ の範囲。
-data AtcGraph = AtcGraph !Int !(U.Vector Int) !(U.Vector Int) !(U.Vector Int)
+data AtcGraph = AtcGraph !Int !(U.Vector Int) !(U.Vector Int) !(U.Vector Int) !Direction
 
 instance Show AtcGraph where
   show g = "AtcGraph {vertices = " ++ show (numVertices g) ++ ", edges = " ++ show (graphEdges g) ++ "}"
@@ -74,21 +80,28 @@ instance Show AtcGraph where
 --
 -- 頂点数は辺に出てくる最大の頂点番号。それより大きい番号の頂点は (辺がないので) 入らない。
 undirectedGraph :: (G.Vector v Int) => Grid v Int -> AtcGraph
-undirectedGraph g = buildCSR (vertexCountOf es) (es U.++ U.map (\(u, v, c) -> (v, u, c)) es)
+undirectedGraph g = buildCSR Undirected (vertexCountOf es) (bothWays es)
   where
     es = edgesOfGrid "undirectedGraph" g
 
 -- | 1 始まりの @u v@ / @u v w@ の並びから、@u@ から @v@ への有向グラフを作る。
 -- 頂点数は 'undirectedGraph' と同じく、辺に出てくる最大の頂点番号。
 directedGraph :: (G.Vector v Int) => Grid v Int -> AtcGraph
-directedGraph g = buildCSR (vertexCountOf es) es
+directedGraph g = buildCSR Directed (vertexCountOf es) es
   where
     es = edgesOfGrid "directedGraph" g
 
 -- | 0 始まりの @(u, v, 重み)@ のリストから有向グラフを作る。
--- 無向にしたいときは両向きを入れる。
+-- 無向にしたいときは 'undirectedGraphFromList'。
 graphFromList :: Int -> [(Int, Int, Int)] -> AtcGraph
-graphFromList n es = buildCSR n (U.fromList es)
+graphFromList n es = buildCSR Directed n (U.fromList es)
+
+-- | 0 始まりの @(u, v, 重み)@ のリストから無向グラフを作る。各辺は片方の向きだけ渡す。
+undirectedGraphFromList :: Int -> [(Int, Int, Int)] -> AtcGraph
+undirectedGraphFromList n es = buildCSR Undirected n (bothWays (U.fromList es))
+
+bothWays :: U.Vector (Int, Int, Int) -> U.Vector (Int, Int, Int)
+bothWays es = es U.++ U.map (\(u, v, c) -> (v, u, c)) es
 
 edgesOfGrid :: (G.Vector v Int) => String -> Grid v Int -> U.Vector (Int, Int, Int)
 edgesOfGrid name (Grid w h d)
@@ -103,11 +116,11 @@ vertexCountOf :: U.Vector (Int, Int, Int) -> Int
 vertexCountOf = U.foldl' (\k (u, v, _) -> max k (max u v + 1)) 0
 
 -- | 次数を数えて累積和を取り、そこへ書き込む。O(n + m)。同じ頂点の辺は入力順に並ぶ。
-buildCSR :: Int -> U.Vector (Int, Int, Int) -> AtcGraph
-buildCSR n es
+buildCSR :: Direction -> Int -> U.Vector (Int, Int, Int) -> AtcGraph
+buildCSR dir n es
   | U.any (\(u, v, _) -> u < 0 || n <= u || v < 0 || n <= v) es =
       error "Atc.Graph: 頂点番号が範囲外です"
-  | otherwise = AtcGraph n off tgt wt
+  | otherwise = AtcGraph n off tgt wt dir
   where
     m = U.length es
     off = U.scanl' (+) 0 (U.accumulate (+) (U.replicate n 0) (U.map (\(u, _, _) -> (u, 1)) es))
@@ -126,11 +139,15 @@ buildCSR n es
 -- 基本
 
 numVertices :: AtcGraph -> Int
-numVertices (AtcGraph n _ _ _) = n
+numVertices (AtcGraph n _ _ _ _) = n
+
+-- | 有向か無向か。
+graphDirection :: AtcGraph -> Direction
+graphDirection (AtcGraph _ _ _ _ dir) = dir
 
 -- | 出ていく辺の数。無向グラフなら次数。
 outDegree :: AtcGraph -> Int -> Int
-outDegree (AtcGraph _ off _ _) v = off U.! (v + 1) - off U.! v
+outDegree (AtcGraph _ off _ _ _) v = off U.! (v + 1) - off U.! v
 
 -- | @v@ から出る辺の @(行き先, 重み)@。O(1) で切り出す。
 adjacent :: AtcGraph -> Int -> U.Vector (Int, Int)
@@ -138,11 +155,11 @@ adjacent g v = U.zip (adjacentVertices g v) (adjacentWeights g v)
 
 -- | @v@ から出る辺の行き先。
 adjacentVertices :: AtcGraph -> Int -> U.Vector Int
-adjacentVertices (AtcGraph _ off t _) v = U.slice (off U.! v) (off U.! (v + 1) - off U.! v) t
+adjacentVertices (AtcGraph _ off t _ _) v = U.slice (off U.! v) (off U.! (v + 1) - off U.! v) t
 
 -- | @v@ から出る辺の重み。'adjacentVertices' と同じ順。
 adjacentWeights :: AtcGraph -> Int -> U.Vector Int
-adjacentWeights (AtcGraph _ off _ w) v = U.slice (off U.! v) (off U.! (v + 1) - off U.! v) w
+adjacentWeights (AtcGraph _ off _ w _) v = U.slice (off U.! v) (off U.! (v + 1) - off U.! v) w
 
 -- | 全ての有向辺 @(u, v, 重み)@。無向グラフは両向きが入る。
 graphEdges :: AtcGraph -> [(Int, Int, Int)]
@@ -150,7 +167,7 @@ graphEdges g = [(u, v, c) | u <- [0 .. numVertices g - 1], (v, c) <- U.toList (a
 
 -- | 辺の向きを全て逆にする。
 reverseGraph :: AtcGraph -> AtcGraph
-reverseGraph g = buildCSR (numVertices g) (U.fromList [(v, u, c) | (u, v, c) <- graphEdges g])
+reverseGraph g = buildCSR (graphDirection g) (numVertices g) (U.fromList [(v, u, c) | (u, v, c) <- graphEdges g])
 
 -- | "Data.Graph" の 'DG.Graph' に直す (重みは捨てる)。O(n + m)。
 toDataGraph :: AtcGraph -> DG.Graph
@@ -158,12 +175,12 @@ toDataGraph g = DG.buildG (0, numVertices g - 1) [(u, v) | (u, v, _) <- graphEdg
 
 -- 範囲を見ない版 (中で使う)。
 targetsOf :: AtcGraph -> Int -> U.Vector Int
-targetsOf (AtcGraph _ off t _) v =
+targetsOf (AtcGraph _ off t _ _) v =
   let i = U.unsafeIndex off v in U.unsafeSlice i (U.unsafeIndex off (v + 1) - i) t
 {-# INLINE targetsOf #-}
 
 arcs :: AtcGraph -> Int -> U.Vector (Int, Int)
-arcs (AtcGraph _ off t w) v =
+arcs (AtcGraph _ off t w _) v =
   let i = U.unsafeIndex off v
       k = U.unsafeIndex off (v + 1) - i
    in U.zip (U.unsafeSlice i k t) (U.unsafeSlice i k w)
@@ -220,7 +237,7 @@ dijkstraDist g = fst . dijkstraDistPrev g
 
 -- | 'dijkstraDist' と、各頂点の直前の頂点 (始点と届かない頂点は @-1@)。経路は 'pathTo' で。
 dijkstraDistPrev :: AtcGraph -> [Int] -> (U.Vector Int, U.Vector Int)
-dijkstraDistPrev g@(AtcGraph n _ tgt _) srcs = runST $ do
+dijkstraDistPrev g@(AtcGraph n _ tgt _ _) srcs = runST $ do
   dist <- UM.replicate n (-1)
   prev <- UM.replicate n (-1)
   -- (距離, 頂点) の二分ヒープ。積むのは辺ごとに高々 1 回と始点なので、大きさは m + 始点数。
@@ -412,7 +429,7 @@ isBipartite = maybe False (const True) . bipartiteColoring
 
 -- | トポロジカル順 (どの辺も前から後ろへ向かう並び)。閉路があれば 'Nothing'。O(n + m)。
 topologicalOrder :: AtcGraph -> Maybe (U.Vector Int)
-topologicalOrder g@(AtcGraph n _ tgt _) = runST $ do
+topologicalOrder g@(AtcGraph n _ tgt _ _) = runST $ do
   indeg <- U.thaw (U.accumulate (+) (U.replicate n 0) (U.map (\v -> (v, 1 :: Int)) tgt))
   que <- UM.unsafeNew n
   let push !tl v = do
@@ -478,7 +495,7 @@ splitBridgeComponents g = partsFromIds g (componentIdsBy g (\u v -> not (isBridg
 -- 自己ループはその頂点を含む成分のどれかに入る。
 -- 成分は、頂点 (昇順) の並びの辞書順。O((n + m) log n)。
 splitBiconnectedComponents :: AtcGraph -> (V.Vector (AtcGraph, U.Vector Int), V.Vector [(Int, Int)])
-splitBiconnectedComponents g@(AtcGraph n _ tgt _) = (buildParts g verts arcComp, loc)
+splitBiconnectedComponents g@(AtcGraph n _ tgt _ _) = (buildParts g verts arcComp, loc)
   where
     Lowlink ordv _ _ blocks home = lowlink g
     sorted = V.fromList (map (U.modify Intro.sort) blocks)
@@ -521,14 +538,14 @@ articulationPoints g = [v | v <- [0 .. n - 1], cut U.! v || rootKids U.! v >= 2]
 -- | 成分を 1 頂点に縮める。成分をまたぐ辺だけを (重み付きのまま、多重辺もそのまま) 残す。
 -- 'splitComponents' / 'splitStrongComponents' / 'splitBridgeComponents' の 2 つ目を渡す。O(n + m)。
 condense :: (G.Vector v (Int, Int)) => v (Int, Int) -> AtcGraph -> AtcGraph
-condense loc g@(AtcGraph _ _ tgt wt) = buildCSR k (U.filter (\(a, b, _) -> a /= b) es)
+condense loc g@(AtcGraph _ _ tgt wt _) = buildCSR (graphDirection g) k (U.filter (\(a, b, _) -> a /= b) es)
   where
     k = if G.null loc then 0 else 1 + G.foldl' (\x (c, _) -> max x c) 0 loc
     es = U.zipWith3 (\u v c -> (fst (loc G.! u), fst (loc G.! v), c)) (arcSources g) tgt wt
 
 -- 各辺の出発点。
 arcSources :: AtcGraph -> U.Vector Int
-arcSources (AtcGraph n off _ _) = U.create $ do
+arcSources (AtcGraph n off _ _ _) = U.create $ do
   out <- UM.unsafeNew (U.last off)
   rep n $ \u -> do
     let s = U.unsafeIndex off u
@@ -563,7 +580,7 @@ componentIdsBy g ok = runST $ do
 
 -- 成分数と頂点ごとの成分番号から、分解の結果を作る。
 partsFromIds :: AtcGraph -> (Int, U.Vector Int) -> (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
-partsFromIds g@(AtcGraph n _ tgt _) (k, cid) = (buildParts g verts arcComp, loc)
+partsFromIds g@(AtcGraph n _ tgt _ _) (k, cid) = (buildParts g verts arcComp, loc)
   where
     cnt = U.accumulate (+) (U.replicate k 0) (U.map (\c -> (c, 1)) cid)
     voff = U.scanl' (+) 0 cnt
@@ -584,7 +601,7 @@ partsFromIds g@(AtcGraph n _ tgt _) (k, cid) = (buildParts g verts arcComp, loc)
 -- 成分ごとの頂点 (昇順) と、辺ごとの成分 (-1 なら落とす) から部分グラフを作る。
 -- 成分を 1 つずつ、元の番号 → 部分の番号を同じ配列に書き直しながら処理する。
 buildParts :: AtcGraph -> V.Vector (U.Vector Int) -> U.Vector Int -> V.Vector (AtcGraph, U.Vector Int)
-buildParts g@(AtcGraph n _ tgt wt) verts arcComp = runST $ do
+buildParts g@(AtcGraph n _ tgt wt _) verts arcComp = runST $ do
   -- 辺を成分ごとに (成分の中は元の順で) 並べる。
   pos <- U.thaw aoff
   order <- UM.unsafeNew (U.last aoff)
@@ -602,7 +619,7 @@ buildParts g@(AtcGraph n _ tgt wt) verts arcComp = runST $ do
       lu <- UM.unsafeRead local (src U.! a)
       lw <- UM.unsafeRead local (tgt U.! a)
       pure (lu, lw, wt U.! a)
-    pure (buildCSR (U.length vs) es, vs)
+    pure (buildCSR (graphDirection g) (U.length vs) es, vs)
   where
     k = V.length verts
     src = arcSources g

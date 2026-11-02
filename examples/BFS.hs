@@ -124,7 +124,7 @@ components :: IO ()
 components = do
   [n, m] <- ints
   es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
-  let g = graphFromList n (concat [[(u - 1, v - 1, 1), (v - 1, u - 1, 1)] | [u, v] <- toRows es])
+  let g = undirectedGraphFromList n [(u - 1, v - 1, 1) | [u, v] <- toRows es]
       (cnt, comp) = runBFS (dense (0, n - 1)) $ do
         let go v i = do
               seen <- valueOf v
