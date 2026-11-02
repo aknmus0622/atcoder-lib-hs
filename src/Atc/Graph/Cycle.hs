@@ -3,6 +3,7 @@
 -- | 一般のグラフの単純閉路。
 --
 -- 有向か無向かはグラフが覚えている ('graphDirection') ので、関数は向きによらず同じ。
+-- 'AtcGraph' にも 'MGraph' にも使える ('MGraph' なら返り値は @m@ の中に入る)。
 -- Functional Graph なら "Atc.Graph.Functional" の 'Atc.Graph.Functional.cyclesFG' のほうが速い。
 --
 -- > let g = undirectedGraph es
@@ -62,8 +63,12 @@ minCycle = foldl' step Nothing
 -- 1 つ見つける
 
 -- | 閉路を 1 つ。なければ 'Nothing'。無向の親へ戻る辺は 1 本だけ飛ばす。O(n + m)。
-findCycle :: AtcGraph -> Maybe (U.Vector Int)
-findCycle g = fmap (canonCycle g) $ runST $ do
+{-# INLINE findCycle #-}
+findCycle :: (GraphKind g) => g -> GraphRet g (Maybe (U.Vector Int))
+findCycle g = primGraph g findCycleC
+
+findCycleC :: AtcGraph -> Maybe (U.Vector Int)
+findCycleC g = fmap (canonCycle g) $ runST $ do
   -- 0 = 未訪問, 1 = 潜っている途中, 2 = 抜けた
   col <- UM.replicate n (0 :: Int)
   par <- UM.replicate n (-1)
@@ -99,8 +104,12 @@ findCycle g = fmap (canonCycle g) $ runST $ do
     n = numVertices g
 
 -- | @s@ を通る閉路を 1 つ (辺の本数が最小のもの)。なければ 'Nothing'。O(n + m)。
-findCycleFrom :: AtcGraph -> Int -> Maybe (U.Vector Int)
-findCycleFrom g s = canonCycle g . snd <$> closeTree g units s (bfsDistPrev g [s])
+{-# INLINE findCycleFrom #-}
+findCycleFrom :: (GraphKind g) => g -> Int -> GraphRet g (Maybe (U.Vector Int))
+findCycleFrom g x = primGraph g (\c -> findCycleFromC c x)
+
+findCycleFromC :: AtcGraph -> Int -> Maybe (U.Vector Int)
+findCycleFromC g s = canonCycle g . snd <$> closeTree g units s (bfsDistPrev g [s])
   where
     units = [(u, v, 1) | (u, v, _) <- graphEdges g]
 
@@ -140,12 +149,20 @@ closeTree g es s (dist, prev)
       let p = prev U.! v in if p == s || p < 0 then v else branch V.! p
 
 -- | @s@ を通る最短閉路の (長さ, 頂点列)。なければ 'Nothing'。重みは非負。O(m log m)。
-shortestCycleFrom :: AtcGraph -> Int -> Maybe (Int, U.Vector Int)
-shortestCycleFrom g s = fmap (canonCycle g) <$> closeTree g (graphEdges g) s (dijkstraDistPrev g [s])
+{-# INLINE shortestCycleFrom #-}
+shortestCycleFrom :: (GraphKind g) => g -> Int -> GraphRet g (Maybe (Int, U.Vector Int))
+shortestCycleFrom g x = primGraph g (\c -> shortestCycleFromC c x)
+
+shortestCycleFromC :: AtcGraph -> Int -> Maybe (Int, U.Vector Int)
+shortestCycleFromC g s = fmap (canonCycle g) <$> closeTree g (graphEdges g) s (dijkstraDistPrev g [s])
 
 -- | 最短閉路の (長さ, 頂点列)。なければ 'Nothing'。重みは非負。O(nm log m)。
-shortestCycle :: AtcGraph -> Maybe (Int, U.Vector Int)
-shortestCycle g = fmap (canonCycle g) <$> minCycle (mapMaybe from [0 .. numVertices g - 1])
+{-# INLINE shortestCycle #-}
+shortestCycle :: (GraphKind g) => g -> GraphRet g (Maybe (Int, U.Vector Int))
+shortestCycle g = primGraph g shortestCycleC
+
+shortestCycleC :: AtcGraph -> Maybe (Int, U.Vector Int)
+shortestCycleC g = fmap (canonCycle g) <$> minCycle (mapMaybe from [0 .. numVertices g - 1])
   where
     es = graphEdges g
     from s = closeTree g es s (dijkstraDistPrev g [s])
@@ -239,17 +256,33 @@ longestBy fixFirst g es = case closings g noArc n wm dp of
            in walk m (head (filter fits [0 .. n - 1])) (v : acc)
 
 -- | 最長閉路の (長さ, 頂点列)。なければ 'Nothing'。O(2^n n^2)。
-longestCycle :: AtcGraph -> Maybe (Int, U.Vector Int)
-longestCycle g = fmap (canonCycle g) <$> longestBy False g (graphEdges g)
+{-# INLINE longestCycle #-}
+longestCycle :: (GraphKind g) => g -> GraphRet g (Maybe (Int, U.Vector Int))
+longestCycle g = primGraph g longestCycleC
+
+longestCycleC :: AtcGraph -> Maybe (Int, U.Vector Int)
+longestCycleC g = fmap (canonCycle g) <$> longestBy False g (graphEdges g)
 
 -- | @s@ を通る最長閉路の (長さ, 頂点列)。なければ 'Nothing'。O(2^n n^2)。
-longestCycleFrom :: AtcGraph -> Int -> Maybe (Int, U.Vector Int)
-longestCycleFrom g s = fmap (canonCycle g . map (swapFirst s)) <$> longestBy True g (swappedEdges s g)
+{-# INLINE longestCycleFrom #-}
+longestCycleFrom :: (GraphKind g) => g -> Int -> GraphRet g (Maybe (Int, U.Vector Int))
+longestCycleFrom g x = primGraph g (\c -> longestCycleFromC c x)
+
+longestCycleFromC :: AtcGraph -> Int -> Maybe (Int, U.Vector Int)
+longestCycleFromC g s = fmap (canonCycle g . map (swapFirst s)) <$> longestBy True g (swappedEdges s g)
 
 -- | 単純閉路の個数。O(2^n n^2)。
-countCycles :: AtcGraph -> Int
-countCycles g = countBy False g (graphEdges g)
+{-# INLINE countCycles #-}
+countCycles :: (GraphKind g) => g -> GraphRet g Int
+countCycles g = primGraph g countCyclesC
+
+countCyclesC :: AtcGraph -> Int
+countCyclesC g = countBy False g (graphEdges g)
 
 -- | @s@ を通る単純閉路の個数。O(2^n n^2)。
-countCyclesFrom :: AtcGraph -> Int -> Int
-countCyclesFrom g s = countBy True g (swappedEdges s g)
+{-# INLINE countCyclesFrom #-}
+countCyclesFrom :: (GraphKind g) => g -> Int -> GraphRet g Int
+countCyclesFrom g x = primGraph g (\c -> countCyclesFromC c x)
+
+countCyclesFromC :: AtcGraph -> Int -> Int
+countCyclesFromC g s = countBy True g (swappedEdges s g)

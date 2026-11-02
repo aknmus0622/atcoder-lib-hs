@@ -316,3 +316,40 @@ lowlinkByHand = do
 countBridgeArcs :: AtcGraph -> Lowlink -> Int
 countBridgeArcs g link =
   length [() | (u, v, _) <- graphEdges g, u < v, isBridgeArc link u v]
+
+-- | 既存のグラフに足す: 'addGraphVertices' と 'addGraphEdges'。
+--
+-- 超頂点 @n@ を足して全ての始点とつなぐ。無向なら辺は片方の向きだけ渡す。
+-- 元のグラフは変わらない。O(n + m) かかるので、足す辺はまとめて渡す。
+superSource :: IO ()
+superSource = do
+  g <- readUndirected
+  starts <- map (subtract 1) <$> ints
+  let n = numVertices g
+      g' = addGraphEdges (addGraphVertices g 1) [(n, s, 1) | s <- starts]
+  print (U.toList (bfsDist g' [n]))
+
+-- | 辺が増えていくグラフ: 'MGraph'。
+--
+-- 関数は 'AtcGraph' と同じで、返り値が @IO@ に入る。辺を足すのは 1 本 O(1)。
+-- 'bfsDist' のようなアルゴリズムは呼ぶたびに CSR へ写す。
+growing :: IO ()
+growing = do
+  [n, q] <- ints
+  g <- newMGraph Undirected n
+  mapM_ (const (query g)) [1 .. q]
+  where
+    query g = do
+      [t, u, v] <- ints
+      if t == 1
+        then addGraphEdges g [(u - 1, v - 1, 1)]
+        else do
+          d <- bfsDist g [u - 1]
+          print (d U.! (v - 1))
+
+-- | ST の中で作って不変にする: 'createGraph'。
+buildInST :: Int -> [(Int, Int)] -> AtcGraph
+buildInST n es = createGraph $ do
+  g <- newMGraph Directed n
+  addGraphEdges g [(u, v, 1) | (u, v) <- es]
+  pure g
