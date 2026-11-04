@@ -140,13 +140,13 @@ bothWeightAndValue = do
 
 -- | 辺をまとめて読んで 'buildUF' で一息に作る。
 --
--- 幅 2 のグリッドで 1 始まりの辺を受け取る ("Atc.Graph" と同じ形)。
+-- 幅 2 のグリッドで辺を受け取り、'fromOneBased' で包む ("Atc.Graph" と同じ形)。
 -- 不変版なので、作ったあとは @m@ に包まれず、そのまま値として読める。
 fromEdges :: IO ()
 fromEdges = do
   [n, m] <- ints
   es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
-  let uf = buildUF n es
+  let uf = buildUF n (fromOneBased es)
   putStrLn (unwords [show (sizeUF v uf) | v <- [0 .. n - 1]])
   print (countUF uf)
 
@@ -157,7 +157,7 @@ fromWeightedEdges :: IO ()
 fromWeightedEdges = do
   [n, m] <- ints
   es <- getIntGrid 3 m :: IO (Grid U.Vector Int)
-  case buildWUF n es of
+  case buildWUF n (fromOneBased es) of
     Nothing -> putStrLn "No"
     Just uf -> print (diffUF 0 (n - 1) uf)
 

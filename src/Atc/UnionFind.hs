@@ -66,8 +66,8 @@
 --
 -- == 不変版を作る
 --
--- > let uf = buildUF n es       -- es は getIntGrid 2 m で読んだ 1 始まりの辺 (Graph と同じ)
--- > let muf = buildWUF n es     -- 幅 3 (u v d: x_v - x_u = d)。矛盾したら Nothing
+-- > let uf = buildUF n (fromOneBased es)    -- es は getIntGrid 2 m で読んだ辺 (Graph と同じ)
+-- > let muf = buildWUF n (fromOneBased es)  -- 幅 3 (u v d: x_v - x_u = d)。矛盾したら Nothing
 -- > let uf = createUF $ do ...  -- ST の中で可変版を作って取り出す
 -- > uf <- freezeUF muf          -- 可変版を写し取る (以後も可変版は使える)
 -- > muf <- thawUF uf
@@ -90,7 +90,7 @@
 -- 大きさで併合するので木の深さは O(log n) で、経路圧縮は再帰で行う。
 module Atc.UnionFind where
 
-import Atc.Grid (Grid (..))
+import Atc.Grid (Grid (..), ZeroBased (..))
 import Control.Monad (forM_, when)
 import Control.Monad.Primitive (PrimMonad, PrimState)
 import Control.Monad.ST (ST, runST)
@@ -255,17 +255,18 @@ newWUFWith op xs = do
   cnt <- UM.replicate 1 n
   pure (MUnionFind par nxt ws vals cnt op)
 
--- | 1 始まりの辺 @u v@ (幅 2) の並びから不変版を作る。
+-- | 辺 @u v@ (幅 2) の並びから不変版を作る。頂点番号の始まりは 'fromOneBased' / 'fromZeroBased' で示す。
 {-# INLINE buildUF #-}
-buildUF :: (G.Vector u Int) => Int -> Grid u Int -> UnionFind () U.Vector ()
+buildUF :: (G.Vector u Int) => Int -> ZeroBased (Grid u Int) -> UnionFind () U.Vector ()
 buildUF n g = createUF $ do
   uf <- newUF n
   forM_ (ufEdges "buildUF" 2 g) $ \(x, y, _) -> uniteUF x y uf
   pure uf
 
--- | 1 始まりの @u v d@ (幅 3、x_v - x_u = d) の並びから不変版を作る。矛盾したら 'Nothing'。
+-- | @u v d@ (幅 3、x_v - x_u = d) の並びから不変版を作る。矛盾したら 'Nothing'。
+-- 頂点番号の始まりは 'fromOneBased' / 'fromZeroBased' で示す。
 {-# INLINE buildWUF #-}
-buildWUF :: (G.Vector u Int) => Int -> Grid u Int -> Maybe (UnionFind Int U.Vector ())
+buildWUF :: (G.Vector u Int) => Int -> ZeroBased (Grid u Int) -> Maybe (UnionFind Int U.Vector ())
 buildWUF n g = runST $ do
   uf <- newWUF n
   ok <- and <$> mapM (\(x, y, d) -> uniteDiffUF x y d uf) (ufEdges "buildWUF" 3 g)
@@ -418,11 +419,11 @@ ufGroups rs = runST $ do
   flat <- U.unsafeFreeze out
   pure (V.generate m (\g -> U.unsafeSlice (U.unsafeIndex off g) (U.unsafeIndex szs g) flat))
 
--- 1 始まりの辺を 0 始まりの (u, v, d) に直す。幅 2 なら d = 0。
-ufEdges :: (G.Vector u Int) => String -> Int -> Grid u Int -> [(Int, Int, Int)]
-ufEdges name w (Grid gw h d)
+-- 辺の並びを (u, v, d) に直す。幅 2 なら d = 0。
+ufEdges :: (G.Vector u Int) => String -> Int -> ZeroBased (Grid u Int) -> [(Int, Int, Int)]
+ufEdges name w (ZeroBased (Grid gw h d))
   | gw /= w = error ("Atc.UnionFind." ++ name ++ ": 幅は " ++ show w)
-  | w == 2 = [(at (2 * i) - 1, at (2 * i + 1) - 1, 0) | i <- [0 .. h - 1]]
-  | otherwise = [(at (3 * i) - 1, at (3 * i + 1) - 1, at (3 * i + 2)) | i <- [0 .. h - 1]]
+  | w == 2 = [(at (2 * i), at (2 * i + 1), 0) | i <- [0 .. h - 1]]
+  | otherwise = [(at (3 * i), at (3 * i + 1), at (3 * i + 2)) | i <- [0 .. h - 1]]
   where
     at = G.unsafeIndex d

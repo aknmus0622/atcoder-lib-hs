@@ -6,7 +6,7 @@
 -- 'AtcGraph' にも 'MGraph' にも使える ('MGraph' なら返り値は @m@ の中に入る)。
 -- Functional Graph なら "Atc.Graph.Functional" の 'Atc.Graph.Functional.cyclesFG' のほうが速い。
 --
--- > let g = undirectedGraph es
+-- > let g = undirectedGraph (fromOneBased es)
 -- > findCycle g            -- 閉路を 1 つ
 -- > shortestCycle g        -- 最短閉路の (長さ, 頂点列)
 -- > longestCycle g         -- 最長閉路の (長さ, 頂点列)

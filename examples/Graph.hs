@@ -1,6 +1,6 @@
 -- | "Atc.Graph" を使ったグラフのアルゴリズム。
 --
--- 頂点は 0 始まり。入力は 1 始まりとして 1 を引いて取り込む。距離は
+-- 頂点は 0 始まり。入力の始まりは 'fromOneBased' / 'fromZeroBased' で示す。距離は
 -- 届かない頂点を @-1@ (負の重みを扱う関数は 'Nothing') で表す。
 module Graph where
 
@@ -13,13 +13,14 @@ import Input (ints)
 
 -- | 無向グラフを読む (重みなし)。
 --
--- 幅 2 のグリッドで @u v@ を読む。頂点数は辺に出てくる最大の番号になるので、
+-- 幅 2 のグリッドで @u v@ を読み、1 始まりなので 'fromOneBased' で包む。
+-- 頂点数は辺に出てくる最大の番号になるので、
 -- 孤立した頂点がありうるなら 'graphFromList' に頂点数を渡す。
 readUndirected :: IO AtcGraph
 readUndirected = do
   [_, m] <- ints
   es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
-  pure (undirectedGraph es)
+  pure (undirectedGraph (fromOneBased es))
 
 -- | 有向グラフを読む (重み付き)。
 --
@@ -28,7 +29,14 @@ readDirected :: IO AtcGraph
 readDirected = do
   [_, m] <- ints
   es <- getIntGrid 3 m :: IO (Grid U.Vector Int)
-  pure (directedGraph es)
+  pure (directedGraph (fromOneBased es))
+
+-- | 頂点番号が 0 始まりの入力 (@0 .. n - 1@) は 'fromZeroBased' で包む。
+readZeroBased :: IO AtcGraph
+readZeroBased = do
+  [_, m] <- ints
+  es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
+  pure (undirectedGraph (fromZeroBased es))
 
 -- | 0 始まりの辺を自分で組み立てる: 'graphFromList'。
 --
@@ -292,7 +300,7 @@ edgeList :: IO ()
 edgeList = do
   [n, m] <- ints
   es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
-  let arcs' = edgesOfGrid "edgeList" es
+  let arcs' = edgesOfGrid "edgeList" (fromOneBased es)
   print (U.toList arcs')
   print (vertexCountOf arcs') -- 辺に出てくる最大の番号 + 1
   print (numVertices (graphFromList n (U.toList arcs')))

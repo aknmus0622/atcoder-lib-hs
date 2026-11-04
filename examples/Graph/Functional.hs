@@ -1,6 +1,6 @@
 -- | "Atc.Graph.Functional" を使った問題。
 --
--- 行き先の並び @a_1 .. a_N@ は 'functionalGraph' で 'AtcGraph' にする。
+-- 行き先の並び @a_1 .. a_N@ は 'fromOneBased' で 0 始まりに直し、'functionalGraph' で 'AtcGraph' にする。
 -- 結果の頂点番号は 0 始まりなので、出力するときは 1 を足す。
 module Graph.Functional where
 
@@ -13,14 +13,14 @@ import Input (ints)
 teleporter :: IO ()
 teleporter = do
   [_, k] <- ints
-  g <- functionalGraph . U.fromList <$> ints
+  g <- functionalGraph . fromOneBased . U.fromList <$> ints
   print (walkFG g 0 k + 1)
 
 -- | 始点ごとの K 回先: 'jumpTableFG' の表を引く。
 teleporterQueries :: IO ()
 teleporterQueries = do
   [_, q] <- ints
-  g <- functionalGraph . U.fromList <$> ints
+  g <- functionalGraph . fromOneBased . U.fromList <$> ints
   qs <- mapM (const ints) [1 .. q]
   let table = jumpTableFG g (maximum (0 : map (!! 1) qs))
   mapM_ (\[v, k] -> print (jumpFG table (v - 1) k + 1)) qs
@@ -53,7 +53,7 @@ puttingCandiesTable = do
 oneCycle :: IO ()
 oneCycle = do
   _ <- ints
-  g <- functionalGraph . U.fromList <$> ints
+  g <- functionalGraph . fromOneBased . U.fromList <$> ints
   let c = V.head (cyclesFG g)
   print (U.length c)
   putStrLn (unwords (map (show . (+ 1)) (U.toList c)))
@@ -62,14 +62,14 @@ oneCycle = do
 reachablePairs :: IO ()
 reachablePairs = do
   _ <- ints
-  g <- functionalGraph . U.fromList <$> ints
+  g <- functionalGraph . fromOneBased . U.fromList <$> ints
   print (U.sum (reachFG g))
 
 -- | 連結成分の個数: 各成分に閉路は 1 つなので、閉路の個数と等しい。
 componentsOfFunctional :: IO ()
 componentsOfFunctional = do
   _ <- ints
-  g <- functionalGraph . U.fromList <$> ints
+  g <- functionalGraph . fromOneBased . U.fromList <$> ints
   print (countCyclesFG g)
 
 -- | 成分ごとの DP: 各閉路について、流れ込む木の頂点数の最大を求める。
@@ -78,6 +78,6 @@ componentsOfFunctional = do
 largestTree :: IO ()
 largestTree = do
   _ <- ints
-  g <- functionalGraph . U.fromList <$> ints
+  g <- functionalGraph . fromOneBased . U.fromList <$> ints
   let size = foldTreesFG g (const (1 :: Int)) (+)
   mapM_ (print . U.maximum . U.map (size U.!)) (cyclesFG g)

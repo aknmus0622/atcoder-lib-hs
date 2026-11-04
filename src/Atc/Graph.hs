@@ -10,17 +10,16 @@
 --
 -- == 作る
 --
--- 入力の @u v@ (重み付きなら @u v w@) が M 行並んだものを 'getIntGrid' で読んで渡す。
--- 入力の頂点番号は 1 始まりとして、1 を引いて取り込む。
+-- 入力の @u v@ (重み付きなら @u v w@) が M 行並んだものを 'getIntGrid' で読み、
+-- 頂点番号の始まりを 'fromOneBased' / 'fromZeroBased' で示して渡す。
 --
 -- > [n, m] <- getInts
 -- > es <- getIntGrid 2 m :: IO (Grid U.Vector Int)   -- 重み付きなら getIntGrid 3 m
--- > let g = undirectedGraph es      -- 有向なら directedGraph
+-- > let g = undirectedGraph (fromOneBased es)       -- 有向なら directedGraph。0 始まりなら fromZeroBased
 --
--- 頂点数は辺に出てくる最大の頂点番号になる。番号の大きい頂点が孤立しうる
--- (辺が 1 本もない頂点がある) ときは、頂点数を渡せる 'graphFromList' (有向) や
--- 'undirectedGraphFromList' (無向) を使う。0 始まりの頂点番号や、自分で組み立てた辺も
--- これらに渡す。
+-- 頂点数は辺に出てくる最大の頂点番号 (0 始まりに直した後) + 1 になる。番号の大きい頂点が
+-- 孤立しうる (辺が 1 本もない頂点がある) ときは、頂点数を渡せる 'graphFromList' (有向) や
+-- 'undirectedGraphFromList' (無向) を使う。自分で組み立てた辺もこれらに渡す。
 --
 -- グラフは有向か無向かを覚えている ('graphDirection')。"Atc.Graph.Cycle" はこれを見て動く。
 --
@@ -60,7 +59,7 @@
 -- > addGraphEdges g [(0, 1, 1), (1, 2, 1)]    -- 書き換える
 -- > d <- bfsDist g [0]                        -- 同じ関数名
 -- >
--- > let g' = addGraphEdges (undirectedGraph es) [(0, 1, 1)]   -- 不変版は新しいグラフ
+-- > let g' = addGraphEdges (undirectedGraph (fromOneBased es)) [(0, 1, 1)]   -- 不変版は新しいグラフ
 --
 -- 'MGraph' の隣接は足した順に並ぶ。'undirectedGraph' は全辺の順向きのあとに逆向きを
 -- 並べるので、同じ辺でも隣接の順は違うことがある。
@@ -83,7 +82,7 @@
 -- @scc@, @topSort@ …) は避けている。
 module Atc.Graph where
 
-import Atc.Grid (Grid (..))
+import Atc.Grid (Grid (..), ZeroBased (..))
 import Atc.UnionFind (newUF, uniteUF)
 import Control.Monad (foldM, forM_, when)
 import Control.Monad.Primitive (PrimMonad, PrimState)
@@ -116,18 +115,19 @@ instance Show AtcGraph where
 -- ---------------------------------------------------------------------
 -- 作る
 
--- | 1 始まりの @u v@ / @u v w@ の並びから無向グラフを作る。幅が 2 なら重み 1。
+-- | @u v@ / @u v w@ の並びから無向グラフを作る。幅が 2 なら重み 1。
+-- 頂点番号の始まりは 'fromOneBased' / 'fromZeroBased' で示す。
 -- 幅が 2 でも 3 でもなければ 'error'。
 --
--- 頂点数は辺に出てくる最大の頂点番号。それより大きい番号の頂点は (辺がないので) 入らない。
-undirectedGraph :: (G.Vector v Int) => Grid v Int -> AtcGraph
+-- 頂点数は辺に出てくる最大の頂点番号 (0 始まり) + 1。それより大きい番号の頂点は (辺がないので) 入らない。
+undirectedGraph :: (G.Vector v Int) => ZeroBased (Grid v Int) -> AtcGraph
 undirectedGraph g = buildCSR Undirected (vertexCountOf es) (bothWays es)
   where
     es = edgesOfGrid "undirectedGraph" g
 
--- | 1 始まりの @u v@ / @u v w@ の並びから、@u@ から @v@ への有向グラフを作る。
--- 頂点数は 'undirectedGraph' と同じく、辺に出てくる最大の頂点番号。
-directedGraph :: (G.Vector v Int) => Grid v Int -> AtcGraph
+-- | @u v@ / @u v w@ の並びから、@u@ から @v@ への有向グラフを作る。
+-- 頂点番号の始まりと頂点数は 'undirectedGraph' と同じ。
+directedGraph :: (G.Vector v Int) => ZeroBased (Grid v Int) -> AtcGraph
 directedGraph g = buildCSR Directed (vertexCountOf es) es
   where
     es = edgesOfGrid "directedGraph" g
@@ -144,10 +144,12 @@ undirectedGraphFromList n es = buildCSR Undirected n (bothWays (U.fromList es))
 bothWays :: U.Vector (Int, Int, Int) -> U.Vector (Int, Int, Int)
 bothWays es = es U.++ U.map (\(u, v, c) -> (v, u, c)) es
 
-edgesOfGrid :: (G.Vector v Int) => String -> Grid v Int -> U.Vector (Int, Int, Int)
-edgesOfGrid name (Grid w h d)
-  | w == 2 = U.generate h (\i -> (at (2 * i) - 1, at (2 * i + 1) - 1, 1))
-  | w == 3 = U.generate h (\i -> (at (3 * i) - 1, at (3 * i + 1) - 1, at (3 * i + 2)))
+-- | @u v@ / @u v w@ の並びを、0 始まりの @(u, v, 重み)@ の辺に直す。幅が 2 なら重み 1。
+-- 第 1 引数はエラーに出す名前。
+edgesOfGrid :: (G.Vector v Int) => String -> ZeroBased (Grid v Int) -> U.Vector (Int, Int, Int)
+edgesOfGrid name (ZeroBased (Grid w h d))
+  | w == 2 = U.generate h (\i -> (at (2 * i), at (2 * i + 1), 1))
+  | w == 3 = U.generate h (\i -> (at (3 * i), at (3 * i + 1), at (3 * i + 2)))
   | otherwise = error ("Atc.Graph." ++ name ++ ": 幅は 2 (u v) か 3 (u v w)")
   where
     at = G.unsafeIndex d

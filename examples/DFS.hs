@@ -37,7 +37,7 @@ subtreeSizes :: IO ()
 subtreeSizes = do
   n <- head <$> ints
   es <- getIntGrid 2 (n - 1) :: IO (Grid U.Vector Int)
-  let g = undirectedGraph es
+  let g = undirectedGraph (fromOneBased es)
       (_, size) = runDFS (dense (0, n - 1)) $ do
         let go v = visitS v (1 :: Int) $ U.forM_ (adjacentVertices g v) $ \u -> do
               new <- go u
@@ -52,7 +52,7 @@ topoOrCycle :: IO ()
 topoOrCycle = do
   [n, m] <- ints
   es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
-  let g = directedGraph es
+  let g = directedGraph (fromOneBased es)
       ((cyc, post), _) = runDFS (dense (0, n - 1)) $ do
         bad <- liftST (UM.replicate 1 False)
         let go v = visitS v () $ U.forM_ (adjacentVertices g v) $ \u -> do
@@ -72,7 +72,7 @@ eulerTour :: IO ()
 eulerTour = do
   n <- head <$> ints
   es <- getIntGrid 2 (n - 1) :: IO (Grid U.Vector Int)
-  let g = undirectedGraph es
+  let g = undirectedGraph (fromOneBased es)
       (tout, tin) = runDFS (dense (0, n - 1)) $ do
         clock <- liftST (UM.replicate 1 (0 :: Int))
         out <- liftST (UM.replicate n 0)
@@ -94,7 +94,7 @@ countPaths :: IO ()
 countPaths = do
   [n, m] <- ints
   es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
-  let g = undirectedGraph es
+  let g = undirectedGraph (fromOneBased es)
       lim = 10 ^ (6 :: Int) :: Int
       (ans, _) = runDFS (dense (0, n - 1)) $ do
         cnt <- liftST (UM.replicate 1 (0 :: Int))

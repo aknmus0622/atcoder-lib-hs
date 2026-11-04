@@ -24,7 +24,7 @@ namori :: IO ()
 namori = do
   n <- head <$> ints
   es <- getIntGrid 2 n :: IO (Grid U.Vector Int)
-  mapM_ (putStrLn . showCycle) (findCycle (undirectedGraph es))
+  mapM_ (putStrLn . showCycle) (findCycle (undirectedGraph (fromOneBased es)))
 
 -- | 頂点 1 を通る最短閉路 (ABC376 D)。なければ @-1@。
 shortestThroughFirst :: IO ()

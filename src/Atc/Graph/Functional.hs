@@ -3,14 +3,14 @@
 -- | Functional Graph: どの頂点からも辺がちょうど 1 本出ている有向グラフ。
 --
 -- グラフは "Atc.Graph" の 'AtcGraph' をそのまま使う。入力が行き先の並び
--- @a_1 .. a_N@ なら 'functionalGraph' で作る。辺の並びなら 'directedGraph'、
--- 0 始まりの行き先や重み付きなら 'graphFromList' で作ってよい。
+-- @a_1 .. a_N@ なら 'functionalGraph' で作る (始まりは 'fromOneBased' / 'fromZeroBased' で示す)。
+-- 辺の並びなら 'directedGraph'、重み付きなら 'graphFromList' で作ってよい。
 -- 出次数が 1 でない頂点があれば、この節の関数は 'error' で止まる。
 --
 -- 各成分は閉路がちょうど 1 つで、そこへ木が流れ込む形をしている。
 --
 -- > a <- getInts
--- > let g = functionalGraph (U.fromList a)
+-- > let g = functionalGraph (fromOneBased (U.fromList a))
 -- > walkFG g 0 k      -- 頂点 0 から k 回進んだ頂点
 -- > cyclesFG g        -- 閉路の一覧
 -- > reachFG g         -- 各頂点から到達できる頂点数
@@ -34,6 +34,7 @@
 module Atc.Graph.Functional where
 
 import Atc.Graph
+import Atc.Grid (ZeroBased (..))
 import Atc.JumpTable
 import Control.Monad (foldM)
 import Control.Monad.ST (runST)
@@ -44,10 +45,10 @@ import qualified Data.Vector.Unboxed.Mutable as UM
 -- ---------------------------------------------------------------------
 -- 作る
 
--- | 1 始まりの行き先の並び @a_1 .. a_N@ から作る。頂点 @i@ から @a_i@ への重み 1 の辺。
--- 行き先が範囲外なら 'error'。
-functionalGraph :: U.Vector Int -> AtcGraph
-functionalGraph a = graphFromList (U.length a) [(i, x - 1, 1) | (i, x) <- U.toList (U.indexed a)]
+-- | 行き先の並び @a_1 .. a_N@ から作る。頂点 @i@ から @a_i@ への重み 1 の辺。
+-- 頂点番号の始まりは 'fromOneBased' / 'fromZeroBased' で示す。行き先が範囲外なら 'error'。
+functionalGraph :: ZeroBased (U.Vector Int) -> AtcGraph
+functionalGraph (ZeroBased a) = graphFromList (U.length a) [(i, x, 1) | (i, x) <- U.toList (U.indexed a)]
 
 -- | 各頂点の行き先。出次数が 1 でない頂点があれば 'error'。O(n)。
 nextVerticesFG :: AtcGraph -> U.Vector Int

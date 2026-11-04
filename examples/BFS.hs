@@ -38,7 +38,7 @@ graphDist :: IO ()
 graphDist = do
   [n, m] <- ints
   es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
-  let g = undirectedGraph es
+  let g = undirectedGraph (fromOneBased es)
       (_, dist) = runBFS (dense (0, n - 1)) $ do
         visitQ 0 (0 :: Int)
         whileQ $ \v d -> U.forM_ (adjacentVertices g v) $ \u -> visitQ u (d + 1)
@@ -87,7 +87,7 @@ shortestPath :: IO ()
 shortestPath = do
   [n, m] <- ints
   es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
-  let g = undirectedGraph es
+  let g = undirectedGraph (fromOneBased es)
       (prev, dist) = runBFS (dense (0, n - 1)) $ do
         pv <- liftST (UM.replicate n (-1))
         visitQ 0 (0 :: Int)
@@ -106,7 +106,7 @@ countShortest :: IO ()
 countShortest = do
   [n, m] <- ints
   es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
-  let g = undirectedGraph es
+  let g = undirectedGraph (fromOneBased es)
       md = 10 ^ (9 :: Int) + 7
       (_, tbl) = runBFS (dense (0, n - 1)) $ do
         visitQ 0 (0 :: Int, 1 :: Int)
@@ -147,7 +147,7 @@ bipartite :: IO ()
 bipartite = do
   [n, m] <- ints
   es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
-  let g = undirectedGraph es
+  let g = undirectedGraph (fromOneBased es)
       (ok, _) = runBFS (dense (0, n - 1)) $ do
         bad <- liftST (UM.replicate 1 False)
         forM_ [0 .. n - 1] $ \s -> do
@@ -207,7 +207,7 @@ subtreeSizes :: IO ()
 subtreeSizes = do
   n <- head <$> ints
   es <- getIntGrid 2 (n - 1) :: IO (Grid U.Vector Int)
-  let g = undirectedGraph es
+  let g = undirectedGraph (fromOneBased es)
       (order, parent) = runBFS (dense (0, n - 1)) $ do
         visitQ 0 (-1 :: Int)
         whileQ $ \v _ -> U.forM_ (adjacentVertices g v) $ \u -> visitQ u v

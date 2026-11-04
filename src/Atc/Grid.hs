@@ -143,6 +143,19 @@
 --
 -- 既にある 'Grid' から始めるなら 'thawGrid'。
 --
+-- == 入力の頂点番号
+--
+-- 辺の並びなどを読んだ 'Grid' (や @U.Vector Int@) をグラフや Union-Find に渡すときは、
+-- 'fromOneBased' か 'fromZeroBased' で 'ZeroBased' に包む。ライブラリの中はすべて
+-- 0 始まりで、包まずに渡すと型エラーになる。
+--
+-- > es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
+-- > let g = undirectedGraph (fromOneBased es)    -- 入力が 1 始まり (AtCoder の普通の形)
+-- > let g = undirectedGraph (fromZeroBased es)   -- 入力が 0 始まり
+--
+-- 'Grid' は各行の先頭 2 列 (@u v@) だけを直し、3 列目以降 (重みなど) はそのまま。
+-- @U.Vector Int@ はすべての要素を直す。
+--
 -- == 仕組みと、関数の足し方
 --
 -- 処理はすべて可変版 'MGrid' の上で 1 回だけ書いてある。型ごとに書くのは
@@ -725,3 +738,24 @@ createGrid :: (G.Vector v a) => (forall s. ST s (MGrid (G.Mutable v) (ST s) a)) 
 createGrid st = runST $ do
   MGrid w h d <- st
   Grid w h <$> G.unsafeFreeze d
+
+-- ---------------------------------------------------------------------
+-- 入力の頂点番号
+
+-- | 頂点番号を 0 始まりにそろえた入力。'fromOneBased' / 'fromZeroBased' で作る。
+newtype ZeroBased a = ZeroBased a
+
+-- | 頂点番号を持つ入力。'Grid' は各行の先頭 2 列、@U.Vector Int@ はすべての要素が頂点番号。
+class VertexInput a where
+  -- | 1 始まりの頂点番号から 1 を引いて包む。
+  fromOneBased :: a -> ZeroBased a
+
+  -- | 0 始まりの頂点番号をそのまま包む。
+  fromZeroBased :: a -> ZeroBased a
+  fromZeroBased = ZeroBased
+
+instance (G.Vector v Int) => VertexInput (Grid v Int) where
+  fromOneBased (Grid w h d) = ZeroBased (Grid w h (G.imap (\i x -> if i `mod` w < 2 then x - 1 else x) d))
+
+instance VertexInput (U.Vector Int) where
+  fromOneBased = ZeroBased . U.map (subtract 1)
