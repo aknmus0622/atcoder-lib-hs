@@ -27,10 +27,25 @@
 -- > t <- buildSG (U.replicate n (mempty :: Sum Int))  -- 単位元で埋めて作る
 -- > t <- buildLazySG (withLenSG as)                   -- 遅延版 (作用は使い方から決まる)
 --
+-- 演算をその場で渡して作ることもできる (newtype で包まなくてよい)。
+--
+-- > t <- buildWithSG (+) 0 as                         -- 区間和 (値は Int のまま)
+-- > t <- buildWithSG min maxBound as                  -- 区間最小
+-- > t <- buildWithSG gcd 0 as                         -- 区間 gcd
+-- > t <- buildLazyWithSG max (-(10 ^ 18)) (+) (+) 0 as  -- 区間加算・区間最大
+--
+-- 'buildLazyWithSG' の引数は順に、値の演算、単位元、作用のかけ方 @act f x@、
+-- 作用の合成 @comp f g@ (「g の後に f」。新しい作用が左)、何もしない作用。
+-- 渡した演算が条件 (下の「作用」の節) を満たすかは確かめない。
+-- 単位元に作用がかかることがあるので、遅延版の単位元は 'maxBound' のような端の値ではなく、
+-- 足しても溢れない値 (@10 ^ 18@ など) にする (Atc.Graph の @inf@ は maxBound なので使わない)。
+--
+-- 他の関数は、どのビルダーで作った木にも同じように使える。
+--
 -- == 関数
 --
 -- > lengthSG t                 Int     要素数
--- > foldSG l r t               m a     [l, r) の集約 (空なら mempty)
+-- > foldSG l r t               m a     [l, r) の集約 (空なら単位元)
 -- > modifySG i g t             m ()    i 番目を g で書き換える
 -- > applySG l r f t            m ()    [l, r) に作用 f をかける (遅延版のみ意味がある)
 -- > maxRightSG l p t           m Int   p (fold [l, r)) が真である最大の r
@@ -42,20 +57,21 @@
 -- > modifySG i (<> x) t        -- 1 点に足し込む
 -- > foldSG 0 (lengthSG t) t    -- 全体
 --
--- 'toVecSG' 以外は O(log n) ('buildSG' / 'buildLazySG' / 'toVecSG' は O(n))。
+-- 作る関数と 'toVecSG' は O(n)、ほかは O(log n)。
 -- 範囲外の添字はエラーになる。
 --
 -- == 二分探索
 --
--- 'maxRightSG' / 'minLeftSG' の @p@ は @p mempty@ が真で、区間を伸ばすと真から偽に
--- 1 回だけ切り替わること (@p mempty@ が偽ならエラー)。
+-- 'maxRightSG' / 'minLeftSG' の @p@ は単位元で真で、区間を伸ばすと真から偽に
+-- 1 回だけ切り替わること (単位元で偽ならエラー)。
 --
 -- > maxRightSG l (\(Sum s) -> s <= k) t    -- l から和が k 以下で伸ばせる右端 (r は含まない)
 -- > minLeftSG r (\(Min m) -> m >= x) t     -- r の手前から、最小が x 以上で伸ばせる左端
 --
 -- == 作用 (遅延版)
 --
--- 作用 @f@ は 'Monoid' で、'ActSG' のインスタンスを持つこと。次を満たす必要がある。
+-- 'buildLazySG' では、作用 @f@ は 'Monoid' で、'ActSG' のインスタンスを持つこと。
+-- 次を満たす必要がある ('buildLazyWithSG' でも、渡す関数で同じことが要る)。
 --
 -- > actSG mempty x = x
 -- > actSG (f <> g) x = actSG f (actSG g x)            -- f <> g は「g の後に f」
@@ -122,7 +138,7 @@ instance (Monoid a) => ActSG () a where
 -- 本体
 
 -- | セグメント木。葉の数を 2 冪 @sizeSG@ にそろえ、@[sizeSG, sizeSG + n)@ に値を置く。
--- 遅延版でなければ作用の配列は空。
+-- 遅延版でなければ作用の配列は空。演算は作るときに渡したものを持つ。
 data SegTree m v a f = SegTree
   { lengthSG :: !Int
   , logSG :: !Int
@@ -130,41 +146,65 @@ data SegTree m v a f = SegTree
   , isLazySG :: !Bool
   , nodesSG :: !(G.Mutable v (PrimState m) a)
   , lazySG :: !(G.Mutable v (PrimState m) f)
+  , opSG :: a -> a -> a
+  , unitSG :: a
+  , actOpSG :: f -> a -> a
+  , composeSG :: f -> f -> f
+  , idActSG :: f
   }
 
--- | 通常のセグ木を作る。O(n)。
+-- | 通常のセグ木を作る。値の 'Monoid' を使う。O(n)。
 {-# INLINE buildSG #-}
 buildSG :: (PrimMonad m, G.Vector v a, G.Vector v (), Monoid a) => v a -> m (SegTree m v a ())
-buildSG = buildCoreSG False
+buildSG = buildWithSG (<>) mempty
 
--- | 遅延セグ木を作る。作用 @f@ は 'applySG' の使い方から決まる。O(n)。
+-- | 遅延セグ木を作る。値の 'Monoid' と 'ActSG' を使い、作用 @f@ は 'applySG' の使い方から決まる。O(n)。
 {-# INLINE buildLazySG #-}
 buildLazySG :: (PrimMonad m, G.Vector v a, G.Vector v f, ActSG f a) => v a -> m (SegTree m v a f)
-buildLazySG = buildCoreSG True
+buildLazySG = buildLazyWithSG (<>) mempty actSG (<>) mempty
 
--- | @[l, r)@ の集約。空なら 'mempty'。O(log n)。
+-- | @buildWithSG op e xs@: 演算 @op@ と単位元 @e@ を渡して通常のセグ木を作る。O(n)。
+{-# INLINE buildWithSG #-}
+buildWithSG :: (PrimMonad m, G.Vector v a, G.Vector v ()) => (a -> a -> a) -> a -> v a -> m (SegTree m v a ())
+buildWithSG op e = buildCoreSG False op e (\_ x -> x) (\_ _ -> ()) ()
+
+-- | @buildLazyWithSG op e act comp idf xs@: 演算と作用を渡して遅延セグ木を作る。O(n)。
+--
+-- * @op@ / @e@: 値の演算と単位元
+-- * @act f x@: 作用 @f@ を値 @x@ にかける
+-- * @comp f g@: 「@g@ の後に @f@」をかける作用 (新しい作用が左)
+-- * @idf@: 何もしない作用
+{-# INLINE buildLazyWithSG #-}
+buildLazyWithSG ::
+  (PrimMonad m, G.Vector v a, G.Vector v f) =>
+  (a -> a -> a) -> a -> (f -> a -> a) -> (f -> f -> f) -> f -> v a -> m (SegTree m v a f)
+buildLazyWithSG = buildCoreSG True
+
+-- | @[l, r)@ の集約。空なら単位元。O(log n)。
 {-# INLINE foldSG #-}
-foldSG :: (PrimMonad m, G.Vector v a, G.Vector v f, ActSG f a) => Int -> Int -> SegTree m v a f -> m a
+foldSG :: (PrimMonad m, G.Vector v a, G.Vector v f) => Int -> Int -> SegTree m v a f -> m a
 foldSG l r t
   | l < 0 || r > lengthSG t || l > r = error ("foldSG: 範囲外: " ++ show (l, r))
-  | l == r = pure mempty
+  | l == r = pure e
   | otherwise = do
       let l0 = l + sizeSG t
           r0 = r + sizeSG t
       pushBoundsSG l0 r0 t
       let go !i !j !sml !smr
-            | i >= j = pure (sml <> smr)
+            | i >= j = pure (op sml smr)
             | otherwise = do
-                sml' <- if odd i then (sml <>) <$> GM.unsafeRead d i else pure sml
-                smr' <- if odd j then (<> smr) <$> GM.unsafeRead d (j - 1) else pure smr
+                sml' <- if odd i then op sml <$> GM.unsafeRead d i else pure sml
+                smr' <- if odd j then (`op` smr) <$> GM.unsafeRead d (j - 1) else pure smr
                 go ((i + 1) `shiftR` 1) (j `shiftR` 1) sml' smr'
-      go l0 r0 mempty mempty
+      go l0 r0 e e
   where
     d = nodesSG t
+    op = opSG t
+    e = unitSG t
 
 -- | @i@ 番目を @g@ で書き換える。O(log n)。
 {-# INLINE modifySG #-}
-modifySG :: (PrimMonad m, G.Vector v a, G.Vector v f, ActSG f a) => Int -> (a -> a) -> SegTree m v a f -> m ()
+modifySG :: (PrimMonad m, G.Vector v a, G.Vector v f) => Int -> (a -> a) -> SegTree m v a f -> m ()
 modifySG i g t
   | i < 0 || i >= lengthSG t = error ("modifySG: 範囲外: " ++ show i)
   | otherwise = do
@@ -175,9 +215,9 @@ modifySG i g t
       GM.unsafeWrite d k $! g x
       forM_ [1 .. logSG t] $ \s -> updateSG (k `shiftR` s) t
 
--- | @[l, r)@ に作用 @f@ をかける。'buildSG' で作った木 (作用が ()) では何もしない。O(log n)。
+-- | @[l, r)@ に作用 @f@ をかける。通常のセグ木 (作用が ()) では何もしない。O(log n)。
 {-# INLINE applySG #-}
-applySG :: (PrimMonad m, G.Vector v a, G.Vector v f, ActSG f a) => Int -> Int -> f -> SegTree m v a f -> m ()
+applySG :: (PrimMonad m, G.Vector v a, G.Vector v f) => Int -> Int -> f -> SegTree m v a f -> m ()
 applySG l r f t
   | l < 0 || r > lengthSG t || l > r = error ("applySG: 範囲外: " ++ show (l, r))
   | l == r || not (isLazySG t) = pure ()
@@ -196,23 +236,24 @@ applySG l r f t
 
 -- | @maxRightSG l p t@: @p (fold [l, r))@ が真である最大の @r@。O(log n)。
 {-# INLINE maxRightSG #-}
-maxRightSG :: (PrimMonad m, G.Vector v a, G.Vector v f, ActSG f a) => Int -> (a -> Bool) -> SegTree m v a f -> m Int
+maxRightSG :: (PrimMonad m, G.Vector v a, G.Vector v f) => Int -> (a -> Bool) -> SegTree m v a f -> m Int
 maxRightSG l p t
   | l < 0 || l > n = error ("maxRightSG: 範囲外: " ++ show l)
-  | not (p mempty) = error "maxRightSG: p mempty が偽"
+  | not (p (unitSG t)) = error "maxRightSG: p (単位元) が偽"
   | l == n = pure n
   | otherwise = do
       let k0 = l + size
       when (isLazySG t) $ forM_ [logSG t, logSG t - 1 .. 1] $ \s -> pushSG (k0 `shiftR` s) t
-      up k0 mempty
+      up k0 (unitSG t)
   where
     n = lengthSG t
     size = sizeSG t
     d = nodesSG t
+    op = opSG t
     up k0 !sm = do
       let k = k0 `shiftR` countTrailingZeros k0
       x <- GM.unsafeRead d k
-      let sm' = sm <> x
+      let sm' = op sm x
       if not (p sm')
         then down k sm
         else
@@ -224,28 +265,29 @@ maxRightSG l p t
           when (isLazySG t) $ pushSG k t
           let c = 2 * k
           x <- GM.unsafeRead d c
-          let sm' = sm <> x
+          let sm' = op sm x
           if p sm' then down (c + 1) sm' else down c sm
 
 -- | @minLeftSG r p t@: @p (fold [l, r))@ が真である最小の @l@。O(log n)。
 {-# INLINE minLeftSG #-}
-minLeftSG :: (PrimMonad m, G.Vector v a, G.Vector v f, ActSG f a) => Int -> (a -> Bool) -> SegTree m v a f -> m Int
+minLeftSG :: (PrimMonad m, G.Vector v a, G.Vector v f) => Int -> (a -> Bool) -> SegTree m v a f -> m Int
 minLeftSG r p t
   | r < 0 || r > lengthSG t = error ("minLeftSG: 範囲外: " ++ show r)
-  | not (p mempty) = error "minLeftSG: p mempty が偽"
+  | not (p (unitSG t)) = error "minLeftSG: p (単位元) が偽"
   | r == 0 = pure 0
   | otherwise = do
       let k0 = r + size
       when (isLazySG t) $ forM_ [logSG t, logSG t - 1 .. 1] $ \s -> pushSG ((k0 - 1) `shiftR` s) t
-      up k0 mempty
+      up k0 (unitSG t)
   where
     size = sizeSG t
     d = nodesSG t
+    op = opSG t
     shrink k = if k > 1 && odd k then shrink (k `shiftR` 1) else k
     up k0 !sm = do
       let k = shrink (k0 - 1)
       x <- GM.unsafeRead d k
-      let sm' = x <> sm
+      let sm' = op x sm
       if not (p sm')
         then down k sm
         else if k .&. negate k == k then pure 0 else up k sm'
@@ -255,12 +297,12 @@ minLeftSG r p t
           when (isLazySG t) $ pushSG k t
           let c = 2 * k + 1
           x <- GM.unsafeRead d c
-          let sm' = x <> sm
+          let sm' = op x sm
           if p sm' then down (c - 1) sm' else down c sm
 
 -- | すべての要素を順に並べたベクタ。O(n)。
 {-# INLINE toVecSG #-}
-toVecSG :: (PrimMonad m, G.Vector v a, G.Vector v f, ActSG f a) => SegTree m v a f -> m (v a)
+toVecSG :: (PrimMonad m, G.Vector v a, G.Vector v f) => SegTree m v a f -> m (v a)
 toVecSG t = do
   when (isLazySG t) $ forM_ [1 .. sizeSG t - 1] $ \k -> pushSG k t
   G.freeze (GM.unsafeSlice (sizeSG t) (lengthSG t) (nodesSG t))
@@ -428,52 +470,52 @@ instance (U.Unbox a) => U.Unbox (AffineSG a)
 -- 以下は内部用。
 
 {-# INLINE buildCoreSG #-}
-buildCoreSG :: (PrimMonad m, G.Vector v a, G.Vector v f, Monoid a, Monoid f) => Bool -> v a -> m (SegTree m v a f)
-buildCoreSG lazy xs = do
+buildCoreSG ::
+  (PrimMonad m, G.Vector v a, G.Vector v f) =>
+  Bool -> (a -> a -> a) -> a -> (f -> a -> a) -> (f -> f -> f) -> f -> v a -> m (SegTree m v a f)
+buildCoreSG lazy op e act comp idf xs = do
   let n = G.length xs
       lg = head [k | k <- [0 ..], 1 `shiftL` k >= n]
       size = 1 `shiftL` lg :: Int
-  d <- GM.replicate (2 * size) mempty
+  d <- GM.replicate (2 * size) e
   forM_ [0 .. n - 1] $ \i -> GM.unsafeWrite d (size + i) $! G.unsafeIndex xs i
-  lz <- GM.replicate (if lazy then size else 0) mempty
-  let t = SegTree n lg size lazy d lz
-  forM_ [size - 1, size - 2 .. 1] $ \k -> updateSGRaw k d
+  lz <- GM.replicate (if lazy then size else 0) idf
+  let t = SegTree n lg size lazy d lz op e act comp idf
+  forM_ [size - 1, size - 2 .. 1] $ \k -> updateSG k t
   pure t
 
 -- 節点 k を子から作り直す。
 {-# INLINE updateSG #-}
-updateSG :: (PrimMonad m, G.Vector v a, Semigroup a) => Int -> SegTree m v a f -> m ()
-updateSG k t = updateSGRaw k (nodesSG t)
-
-{-# INLINE updateSGRaw #-}
-updateSGRaw :: (PrimMonad m, GM.MVector mv a, Semigroup a) => Int -> mv (PrimState m) a -> m ()
-updateSGRaw k d = do
+updateSG :: (PrimMonad m, G.Vector v a) => Int -> SegTree m v a f -> m ()
+updateSG k t = do
   x <- GM.unsafeRead d (2 * k)
   y <- GM.unsafeRead d (2 * k + 1)
-  GM.unsafeWrite d k $! x <> y
+  GM.unsafeWrite d k $! opSG t x y
+  where
+    d = nodesSG t
 
 -- 節点 k に f をかけ、内部の節点なら f を溜める。
 {-# INLINE allApplySG #-}
-allApplySG :: (PrimMonad m, G.Vector v a, G.Vector v f, ActSG f a) => Int -> f -> SegTree m v a f -> m ()
+allApplySG :: (PrimMonad m, G.Vector v a, G.Vector v f) => Int -> f -> SegTree m v a f -> m ()
 allApplySG k f t = do
   x <- GM.unsafeRead (nodesSG t) k
-  GM.unsafeWrite (nodesSG t) k $! actSG f x
+  GM.unsafeWrite (nodesSG t) k $! actOpSG t f x
   when (k < sizeSG t) $ do
     g <- GM.unsafeRead (lazySG t) k
-    GM.unsafeWrite (lazySG t) k $! f <> g
+    GM.unsafeWrite (lazySG t) k $! composeSG t f g
 
 -- 節点 k に溜めた作用を子に流す。
 {-# INLINE pushSG #-}
-pushSG :: (PrimMonad m, G.Vector v a, G.Vector v f, ActSG f a) => Int -> SegTree m v a f -> m ()
+pushSG :: (PrimMonad m, G.Vector v a, G.Vector v f) => Int -> SegTree m v a f -> m ()
 pushSG k t = do
   f <- GM.unsafeRead (lazySG t) k
   allApplySG (2 * k) f t
   allApplySG (2 * k + 1) f t
-  GM.unsafeWrite (lazySG t) k mempty
+  GM.unsafeWrite (lazySG t) k $! idActSG t
 
 -- 葉 l0 と r0 (r0 は含まない) の祖先に溜めた作用を、上から流す。遅延版でなければ何もしない。
 {-# INLINE pushBoundsSG #-}
-pushBoundsSG :: (PrimMonad m, G.Vector v a, G.Vector v f, ActSG f a) => Int -> Int -> SegTree m v a f -> m ()
+pushBoundsSG :: (PrimMonad m, G.Vector v a, G.Vector v f) => Int -> Int -> SegTree m v a f -> m ()
 pushBoundsSG l0 r0 t =
   when (isLazySG t) $ forM_ [logSG t, logSG t - 1 .. 1] $ \s -> do
     when (((l0 `shiftR` s) `shiftL` s) /= l0) $ pushSG (l0 `shiftR` s) t

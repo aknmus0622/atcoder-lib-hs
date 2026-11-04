@@ -5,7 +5,8 @@
 
 -- | "Atc.SegTree" を使った問題。
 --
--- 値は base の 'Monoid' ('Sum' / 'Min' / 'Max' やそのタプル) をそのまま使う。
+-- 値は base の 'Monoid' ('Sum' / 'Min' / 'Max' やそのタプル) をそのまま使うか、
+-- 'buildWithSG' / 'buildLazyWithSG' で演算をその場で渡す。
 -- 区間は半開区間 @[l, r)@、添字は 0 始まり。
 module SegTree where
 
@@ -29,6 +30,34 @@ rangeMin = do
     case qu of
       [0, i, x] -> modifySG i (const (Min x)) t
       [_, l, r] -> foldSG l r t >>= print . getMin
+      _ -> error "query"
+
+-- | 'rangeMin' を、演算を直接渡して書いたもの。値は 'Int' のまま。
+rangeMinWith :: IO ()
+rangeMinWith = do
+  [_, q] <- ints
+  as <- U.fromList <$> ints
+  t <- buildWithSG min maxBound as
+  forM_ [1 .. q] $ \_ -> do
+    qu <- ints
+    case qu of
+      [0, i, x] -> modifySG i (const x) t
+      [_, l, r] -> foldSG l r t >>= print
+      _ -> error "query"
+
+-- | 区間加算・区間最大を、演算を直接渡して書いたもの。@0 l r x@ で [l, r) に x を足し、
+-- @1 l r@ で [l, r) の最大を出力する。
+-- 単位元にも作用がかかるので、'minBound' ではなく溢れない @-10^18@ にする。
+rangeAddMaxWith :: IO ()
+rangeAddMaxWith = do
+  [_, q] <- ints
+  as <- U.fromList <$> ints
+  t <- buildLazyWithSG max (-(10 ^ (18 :: Int))) (+) (+) 0 as
+  forM_ [1 .. q] $ \_ -> do
+    qu <- ints
+    case qu of
+      [0, l, r, x] -> applySG l r x t
+      [_, l, r] -> foldSG l r t >>= print
       _ -> error "query"
 
 -- | 区間加算・区間和。@0 l r x@ で [l, r) に x を足し、@1 l r@ で [l, r) の和を出力する。
