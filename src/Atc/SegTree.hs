@@ -16,31 +16,30 @@
 --
 -- > SegTree m v a f     m: IO か ST s
 -- >                     v: 置き場所 (U.Vector / V.Vector)。値と作用で共通
--- >                     a: 値。'Monoid' であること
+-- >                     a: 値
 -- >                     f: 作用。通常のセグ木では ()
 --
--- 値は base の 'Monoid' をそのまま使う ('Sum' / 'Min' / 'Max' / 'First' / 'Last' /
--- 'Dual' など。タプルも各成分ごとのモノイドになる)。'Data.Semigroup' から import する。
--- 'Min' / 'Max' の単位元は 'maxBound' / 'minBound'。
+-- == 作る
 --
--- > t <- buildSG (U.map Min as)                       -- 1 点更新・区間最小
--- > t <- buildSG (U.replicate n (mempty :: Sum Int))  -- 単位元で埋めて作る
--- > t <- buildLazySG (withLenSG as)                   -- 遅延版 (作用は使い方から決まる)
+-- 演算と単位元を渡して作る。値は 'Int' のままでよい。
 --
--- 演算をその場で渡して作ることもできる (newtype で包まなくてよい)。
+-- > t <- buildSG (+) 0 as                              -- 区間和
+-- > t <- buildSG min maxBound as                       -- 区間最小
+-- > t <- buildSG gcd 0 as                              -- 区間 gcd
+-- > t <- buildSG (+) 0 (U.replicate n 0)               -- 単位元で埋めて作る
+-- > t <- buildLazySG max (-(10 ^ 18)) (+) (+) 0 as     -- 区間加算・区間最大
 --
--- > t <- buildWithSG (+) 0 as                         -- 区間和 (値は Int のまま)
--- > t <- buildWithSG min maxBound as                  -- 区間最小
--- > t <- buildWithSG gcd 0 as                         -- 区間 gcd
--- > t <- buildLazyWithSG max (-(10 ^ 18)) (+) (+) 0 as  -- 区間加算・区間最大
---
--- 'buildLazyWithSG' の引数は順に、値の演算、単位元、作用のかけ方 @act f x@、
+-- 'buildLazySG' の引数は順に、値の演算、単位元、作用のかけ方 @act f x@、
 -- 作用の合成 @comp f g@ (「g の後に f」。新しい作用が左)、何もしない作用。
 -- 渡した演算が条件 (下の「作用」の節) を満たすかは確かめない。
 -- 単位元に作用がかかることがあるので、遅延版の単位元は 'maxBound' のような端の値ではなく、
 -- 足しても溢れない値 (@10 ^ 18@ など) にする (Atc.Graph の @inf@ は maxBound なので使わない)。
 --
--- 他の関数は、どのビルダーで作った木にも同じように使える。
+-- base の 'Monoid' ('Sum' / 'Min' / 'Max' / 'First' / 'Last' / 'Dual' やそのタプル) を
+-- 使うときは @(<>)@ と 'mempty' を渡す。遅延版で 'ActSG' の作用を使うときは 'actSG' も渡す。
+--
+-- > t <- buildSG (<>) mempty (U.map Min as)
+-- > t <- buildLazySG (<>) mempty actSG (<>) mempty (withLenSG as)   -- 作用は使い方から決まる
 --
 -- == 関数
 --
@@ -65,26 +64,29 @@
 -- 'maxRightSG' / 'minLeftSG' の @p@ は単位元で真で、区間を伸ばすと真から偽に
 -- 1 回だけ切り替わること (単位元で偽ならエラー)。
 --
--- > maxRightSG l (\(Sum s) -> s <= k) t    -- l から和が k 以下で伸ばせる右端 (r は含まない)
--- > minLeftSG r (\(Min m) -> m >= x) t     -- r の手前から、最小が x 以上で伸ばせる左端
+-- > maxRightSG l (<= k) t      -- 区間和の木で、l から和が k 以下で伸ばせる右端 (r は含まない)
+-- > minLeftSG r (>= x) t       -- 区間最小の木で、r の手前から最小が x 以上で伸ばせる左端
 --
 -- == 作用 (遅延版)
 --
--- 'buildLazySG' では、作用 @f@ は 'Monoid' で、'ActSG' のインスタンスを持つこと。
--- 次を満たす必要がある ('buildLazyWithSG' でも、渡す関数で同じことが要る)。
+-- 値の演算 @op@ と単位元 @e@、作用 @act@ / @comp@ / @idf@ は次を満たすこと。
 --
--- > actSG mempty x = x
--- > actSG (f <> g) x = actSG f (actSG g x)            -- f <> g は「g の後に f」
--- > actSG f (x <> y) = actSG f x <> actSG f y        -- 準同型
+-- > op (op x y) z = op x (op y z),  op e x = op x e = x   -- 値がモノイド
+-- > comp (comp f g) h = comp f (comp g h)                 -- 作用がモノイド
+-- > act idf x = x
+-- > act (comp f g) x = act f (act g x)                    -- comp f g は「g の後に f」
+-- > act f (op x y) = op (act f x) (act f y)               -- 準同型
 --
--- 和に作用させるときは長さが要るので、値を @(Sum 和, Sum 長さ)@ にする ('withLenSG')。
--- 用意してある作用:
+-- 和に作用させるときは長さが要るので、値を (和, 長さ) にする ('withLenSG')。
+--
+-- 'ActSG' はこの条件を満たす作用をまとめたクラスで、'actSG' と @(<>)@ / 'mempty' を
+-- 'buildLazySG' に渡して使う。用意してある作用:
 --
 -- > AddSG c        加算        Min a / Max a / (Sum a, Sum a)
 -- > SetSG (Just x) 代入        Min a / Max a / (Sum a, Sum a)
 -- > AffineSG b c   x ↦ b x + c  (Sum a, Sum a)
 --
--- > t <- buildLazySG (withLenSG (U.replicate n 0))
+-- > t <- buildLazySG (<>) mempty actSG (<>) mempty (withLenSG (U.replicate n 0))
 -- > applySG l r (AddSG 3) t                          -- [l, r) に 3 を足す
 -- > getSum . fst <$> foldSG l r t                    -- [l, r) の和
 --
@@ -126,6 +128,7 @@ import Data.Vector.Unboxed (MVector, Vector)
 -- 作用
 
 -- | 作用 @f@ を値 @a@ にかける。満たすべき条件はモジュールの説明を参照。
+-- 'buildLazySG' に @(<>) mempty actSG (<>) mempty@ と渡して使う。
 class (Monoid f, Monoid a) => ActSG f a where
   actSG :: f -> a -> a
 
@@ -153,32 +156,22 @@ data SegTree m v a f = SegTree
   , idActSG :: f
   }
 
--- | 通常のセグ木を作る。値の 'Monoid' を使う。O(n)。
+-- | @buildSG op e xs@: 演算 @op@ と単位元 @e@ を渡して通常のセグ木を作る。O(n)。
 {-# INLINE buildSG #-}
-buildSG :: (PrimMonad m, G.Vector v a, G.Vector v (), Monoid a) => v a -> m (SegTree m v a ())
-buildSG = buildWithSG (<>) mempty
+buildSG :: (PrimMonad m, G.Vector v a, G.Vector v ()) => (a -> a -> a) -> a -> v a -> m (SegTree m v a ())
+buildSG op e = buildCoreSG False op e (\_ x -> x) (\_ _ -> ()) ()
 
--- | 遅延セグ木を作る。値の 'Monoid' と 'ActSG' を使い、作用 @f@ は 'applySG' の使い方から決まる。O(n)。
-{-# INLINE buildLazySG #-}
-buildLazySG :: (PrimMonad m, G.Vector v a, G.Vector v f, ActSG f a) => v a -> m (SegTree m v a f)
-buildLazySG = buildLazyWithSG (<>) mempty actSG (<>) mempty
-
--- | @buildWithSG op e xs@: 演算 @op@ と単位元 @e@ を渡して通常のセグ木を作る。O(n)。
-{-# INLINE buildWithSG #-}
-buildWithSG :: (PrimMonad m, G.Vector v a, G.Vector v ()) => (a -> a -> a) -> a -> v a -> m (SegTree m v a ())
-buildWithSG op e = buildCoreSG False op e (\_ x -> x) (\_ _ -> ()) ()
-
--- | @buildLazyWithSG op e act comp idf xs@: 演算と作用を渡して遅延セグ木を作る。O(n)。
+-- | @buildLazySG op e act comp idf xs@: 演算と作用を渡して遅延セグ木を作る。O(n)。
 --
 -- * @op@ / @e@: 値の演算と単位元
 -- * @act f x@: 作用 @f@ を値 @x@ にかける
 -- * @comp f g@: 「@g@ の後に @f@」をかける作用 (新しい作用が左)
 -- * @idf@: 何もしない作用
-{-# INLINE buildLazyWithSG #-}
-buildLazyWithSG ::
+{-# INLINE buildLazySG #-}
+buildLazySG ::
   (PrimMonad m, G.Vector v a, G.Vector v f) =>
   (a -> a -> a) -> a -> (f -> a -> a) -> (f -> f -> f) -> f -> v a -> m (SegTree m v a f)
-buildLazyWithSG = buildCoreSG True
+buildLazySG = buildCoreSG True
 
 -- | @[l, r)@ の集約。空なら単位元。O(log n)。
 {-# INLINE foldSG #-}

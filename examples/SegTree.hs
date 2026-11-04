@@ -5,8 +5,8 @@
 
 -- | "Atc.SegTree" を使った問題。
 --
--- 値は base の 'Monoid' ('Sum' / 'Min' / 'Max' やそのタプル) をそのまま使うか、
--- 'buildWithSG' / 'buildLazyWithSG' で演算をその場で渡す。
+-- 作るときに演算と単位元を渡す。base の 'Monoid' ('Sum' / 'Min' / 'Max' やそのタプル) を
+-- 使うときは @(<>)@ と 'mempty' を渡す。
 -- 区間は半開区間 @[l, r)@、添字は 0 始まり。
 module SegTree where
 
@@ -24,7 +24,7 @@ rangeMin :: IO ()
 rangeMin = do
   [_, q] <- ints
   as <- U.fromList <$> ints
-  t <- buildSG (U.map Min as)
+  t <- buildSG (<>) mempty (U.map Min as)
   forM_ [1 .. q] $ \_ -> do
     qu <- ints
     case qu of
@@ -32,12 +32,12 @@ rangeMin = do
       [_, l, r] -> foldSG l r t >>= print . getMin
       _ -> error "query"
 
--- | 'rangeMin' を、演算を直接渡して書いたもの。値は 'Int' のまま。
-rangeMinWith :: IO ()
-rangeMinWith = do
+-- | 'rangeMin' を、'Min' で包まずに書いたもの。値は 'Int' のまま。
+rangeMinInt :: IO ()
+rangeMinInt = do
   [_, q] <- ints
   as <- U.fromList <$> ints
-  t <- buildWithSG min maxBound as
+  t <- buildSG min maxBound as
   forM_ [1 .. q] $ \_ -> do
     qu <- ints
     case qu of
@@ -45,14 +45,14 @@ rangeMinWith = do
       [_, l, r] -> foldSG l r t >>= print
       _ -> error "query"
 
--- | 区間加算・区間最大を、演算を直接渡して書いたもの。@0 l r x@ で [l, r) に x を足し、
+-- | 区間加算・区間最大。@0 l r x@ で [l, r) に x を足し、
 -- @1 l r@ で [l, r) の最大を出力する。
 -- 単位元にも作用がかかるので、'minBound' ではなく溢れない @-10^18@ にする。
-rangeAddMaxWith :: IO ()
-rangeAddMaxWith = do
+rangeAddMax :: IO ()
+rangeAddMax = do
   [_, q] <- ints
   as <- U.fromList <$> ints
-  t <- buildLazyWithSG max (-(10 ^ (18 :: Int))) (+) (+) 0 as
+  t <- buildLazySG max (-(10 ^ (18 :: Int))) (+) (+) 0 as
   forM_ [1 .. q] $ \_ -> do
     qu <- ints
     case qu of
@@ -66,7 +66,7 @@ rangeAddSum :: IO ()
 rangeAddSum = do
   [_, q] <- ints
   as <- U.fromList <$> ints
-  t <- buildLazySG (withLenSG as)
+  t <- buildLazySG (<>) mempty actSG (<>) mempty (withLenSG as)
   forM_ [1 .. q] $ \_ -> do
     qu <- ints
     case qu of
@@ -83,7 +83,7 @@ rangeAffineSum :: IO ()
 rangeAffineSum = do
   [_, q] <- ints
   as <- U.fromList . map fromIntegral <$> ints
-  t <- buildLazySG (withLenSG (as :: U.Vector Mint))
+  t <- buildLazySG (<>) mempty actSG (<>) mempty (withLenSG (as :: U.Vector Mint))
   forM_ [1 .. q] $ \_ -> do
     qu <- ints
     case qu of
@@ -123,10 +123,10 @@ longestPrefix :: IO ()
 longestPrefix = do
   [_, q] <- ints
   as <- U.fromList <$> ints
-  t <- buildSG (U.map Sum as)
+  t <- buildSG (+) 0 as
   forM_ [1 .. q] $ \_ -> do
     [l, k] <- ints
-    maxRightSG l (\(Sum s) -> s <= k) t >>= print
+    maxRightSG l (<= k) t >>= print
 
 -- | 非可換の例: 2×2 行列の積 (mod 998244353)。@0 i a b c d@ で i 番目の行列を
 -- 置きかえ、@1 l r@ で M_l M_{l+1} ... M_{r-1} を出力する。
@@ -135,7 +135,7 @@ matrixProduct :: IO ()
 matrixProduct = do
   [n, q] <- ints
   ms <- V.replicateM n (toM2 <$> ints)
-  t <- buildSG ms
+  t <- buildSG (<>) mempty ms
   forM_ [1 .. q] $ \_ -> do
     qu <- ints
     case qu of
