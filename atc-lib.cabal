@@ -24,6 +24,7 @@ library
                       , Atc.MonoStack
                       , Atc.SegTree
                       , Atc.Sequence
+                      , Atc.SparseTable
                       , Atc.TwoPointers
                       , Atc.UnionFind
     build-depends:      base >=4.17 && <5
