@@ -8,6 +8,7 @@ library
     exposed-modules:    Atc
                       , Atc.BFS
                       , Atc.BinarySearch
+                      , Atc.Convolution
                       , Atc.DFS
                       , Atc.Debug
                       , Atc.DP
