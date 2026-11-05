@@ -1,8 +1,8 @@
 {-# LANGUAGE FlexibleContexts #-}
 
--- | 二分探索と、要素を出し入れできるソート済みベクタ 'SortedVec'。
+-- | 二分探索・三分探索と、要素を出し入れできるソート済みベクタ 'SortedVec'。
 --
--- 'bisect' はめぐる式の二分探索。'SortedVec' は要素の型を問わず
+-- 'bisect' はめぐる式の二分探索、'ternaryMin' は下に凸な関数の最小を探す三分探索。'SortedVec' は要素の型を問わず
 -- ('U.Vector' 'Int' でも 'V.Vector' (Int, Data) でも)、キー関数を 1 回渡して作る。
 --
 -- > let s = fromVecSV fst ps                     -- キーは fst
@@ -71,6 +71,43 @@ instance Bisect Double where
         | otherwise = go (i - 1) ok mid
         where
           mid = (ok + ng) / 2
+
+-- | @ternaryMin lo hi f@: 三分探索。閉区間 @[lo, hi]@ で @f@ を最小にする @x@ を返す
+-- (最小が複数あればそのどれか)。@f@ は下に凸 (谷が 1 つで、谷以外に平らな所がない) であること。
+-- 最大を探すときは @negate . f@ か @Down . f@ を渡す。
+--
+-- * 'Int': O(log (hi - lo)) 回 @f@ を呼ぶ。
+-- * 'Double': 200 回で打ち切る。
+--
+-- > ternaryMin 0 (10 ^ 9) (\x -> abs (x - 7) + 3)   -- 7
+-- > ternaryMin 0 100 (\t -> (t - 1.5) ^ 2 :: Double) -- 1.5 付近
+class Ternary t where
+  ternaryMin :: (Ord b) => t -> t -> (t -> b) -> t
+
+instance Ternary Int where
+  ternaryMin lo0 hi0 f
+    | lo0 > hi0 = error "Atc.BinarySearch.ternaryMin: lo > hi"
+    | otherwise = go lo0 hi0
+    where
+      go lo hi
+        | hi - lo <= 2 = snd (minimum [(f x, x) | x <- [lo .. hi]])
+        | otherwise =
+            let m1 = lo + (hi - lo) `div` 3
+                m2 = hi - (hi - lo) `div` 3
+             in case compare (f m1) (f m2) of
+                  LT -> go lo (m2 - 1)
+                  GT -> go (m1 + 1) hi
+                  -- 凸なので、等しければ [m1, m2] に最小がある。
+                  EQ -> go m1 m2
+
+instance Ternary Double where
+  ternaryMin lo0 hi0 f = go (200 :: Int) lo0 hi0
+    where
+      go 0 lo hi = (lo + hi) / 2
+      go i lo hi =
+        let m1 = lo + (hi - lo) / 3
+            m2 = hi - (hi - lo) / 3
+         in if f m1 <= f m2 then go (i - 1) lo m2 else go (i - 1) m1 hi
 
 -- | キー @k@ で整列した、要素 @a@ のベクタ。@v@ は 'V.Vector' や 'U.Vector'。
 --

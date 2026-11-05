@@ -56,3 +56,15 @@ logs = do
 cubic :: Double -> Double
 cubic c = bisect 1e9 (-1e9) (\x -> x * x * x + x >= c)
 
+
+-- | 三分探索: 下に凸な関数の最小。ここでは数直線上の点たちとの距離の 2 乗和が最小になる整数。
+nearestPoint :: IO ()
+nearestPoint = do
+  xs <- ints
+  let cost p = sum [(p - x) * (p - x) | x <- xs]
+      best = ternaryMin (minimum xs) (maximum xs) cost
+  print (best, cost best)
+
+-- | 'Double' の三分探索: 最大を探すときは 'negate' する。
+peak :: Double
+peak = ternaryMin 0 10 (\x -> negate (x * (10 - x)))
