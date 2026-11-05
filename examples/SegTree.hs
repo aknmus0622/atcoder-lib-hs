@@ -1,8 +1,3 @@
-{-# LANGUAGE DerivingVia #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TypeFamilies #-}
-
 -- | "Atc.SegTree" を使った問題。
 --
 -- 作るときに演算と単位元を渡す。base の 'Monoid' ('Sum' / 'Min' / 'Max' やそのタプル) を
@@ -14,8 +9,6 @@ import Atc
 import Control.Monad (forM_)
 import Data.Semigroup (Min (..), Sum (..))
 import qualified Data.Vector as V
-import qualified Data.Vector.Generic as G
-import qualified Data.Vector.Generic.Mutable as GM
 import qualified Data.Vector.Unboxed as U
 import Input (ints)
 
@@ -114,8 +107,7 @@ rangeAddSum = do
 -- | 区間アフィン・区間和 (mod 998244353)。@0 l r b c@ で [l, r) の各 a_i を
 -- b a_i + c にし、@1 l r@ で [l, r) の和を出力する。
 --
--- 剰余の型 'Mint' を作って 'AffineSG' に渡す。'U.Vector' に置くため、
--- 'U.IsoUnbox' で 'U.Unbox' のインスタンスも作る (下の 6 行)。
+-- 剰余の型は "Atc.ModInt" の 'Mint' を使う ('U.Vector' にもそのまま置ける)。
 rangeAffineSum :: IO ()
 rangeAffineSum = do
   [_, q] <- ints
@@ -125,34 +117,8 @@ rangeAffineSum = do
     qu <- ints
     case qu of
       [0, l, r, b, c] -> applySG l r (AffineSG (fromIntegral b) (fromIntegral c)) t
-      [_, l, r] -> foldSG l r t >>= print . getMint . getSum . fst
+      [_, l, r] -> foldSG l r t >>= print . getSum . fst
       _ -> error "query"
-
--- | 998244353 で割った余り。
-newtype Mint = Mint {getMint :: Int}
-  deriving (Eq, Show)
-
-instance Num Mint where
-  Mint a + Mint b = Mint ((a + b) `mod` 998244353)
-  Mint a - Mint b = Mint ((a - b) `mod` 998244353)
-  Mint a * Mint b = Mint (a * b `mod` 998244353)
-  fromInteger x = Mint (fromInteger (x `mod` 998244353))
-  abs = id
-  signum = const 1
-
-instance U.IsoUnbox Mint Int where
-  toURepr = getMint
-  fromURepr = Mint
-
-newtype instance U.MVector s Mint = MV_Mint (U.MVector s Int)
-
-newtype instance U.Vector Mint = V_Mint (U.Vector Int)
-
-deriving via (U.As Mint Int) instance GM.MVector U.MVector Mint
-
-deriving via (U.As Mint Int) instance G.Vector U.Vector Mint
-
-instance U.Unbox Mint
 
 -- | 二分探索: 非負の列で、各問い合わせ @l k@ に「[l, r) の和が k 以下になる最大の r」を出力する。
 -- 条件 @(<= k)@ は区間を伸ばすと真から偽に 1 回だけ変わる (値が非負なので)。
@@ -179,7 +145,7 @@ matrixProduct = do
       0 : i : xs -> modifySG i (const (toM2 xs)) t
       [_, l, r] -> do
         M2 a b c d <- foldSG l r t
-        putStrLn (unwords (map (show . getMint) [a, b, c, d]))
+        putStrLn (unwords (map show [a, b, c, d]))
       _ -> error "query"
   where
     toM2 [a, b, c, d] = M2 (fromIntegral a) (fromIntegral b) (fromIntegral c) (fromIntegral d)

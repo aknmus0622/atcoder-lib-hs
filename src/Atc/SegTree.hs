@@ -165,8 +165,9 @@
 --
 -- == 置き場所
 --
--- 用意してある値と作用は 'U.Vector' に置ける。自分で作った型は 'V.Vector' に置くか、
--- 'U.IsoUnbox' で 'U.Unbox' のインスタンスを作る (例は examples/SegTree.hs)。
+-- 用意してある値と作用、"Atc.ModInt" の 'Mint' は 'U.Vector' に置ける。自分で作った型は
+-- 'V.Vector' に置くか、'U.IsoUnbox' で 'U.Unbox' のインスタンスを作る
+-- (作り方は "Atc.ModInt" の 'ModInt' のインスタンスと同じ)。
 --
 -- 値と作用は書き込むときに WHNF まで評価する。'V.Vector' では次の点に注意する。
 --

@@ -19,6 +19,7 @@ library
                       , Atc.JumpTable
                       , Atc.Math
                       , Atc.Memo
+                      , Atc.ModInt
                       , Atc.MonoStack
                       , Atc.SegTree
                       , Atc.TwoPointers
