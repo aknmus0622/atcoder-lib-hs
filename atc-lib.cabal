@@ -26,6 +26,7 @@ library
                       , Atc.SegTree
                       , Atc.Sequence
                       , Atc.SparseTable
+                      , Atc.String
                       , Atc.TwoPointers
                       , Atc.UnionFind
     build-depends:      base >=4.17 && <5
