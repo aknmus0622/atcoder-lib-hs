@@ -186,7 +186,21 @@ topological = do
     Nothing -> putStrLn "閉路があります"
     Just order -> print (map (+ 1) (U.toList order))
 
--- | 連結成分: 'splitComponents'。
+-- | 連結成分の番号: 'componentIds'。
+--
+-- @(成分の数, 頂点ごとの成分番号)@ を返す。部分グラフは作らないので軽い。
+-- 「同じ成分か」「成分がいくつか」だけならこれで足りる。
+-- 有向グラフに使うと、向きを無視した成分 (弱連結成分) になる。
+componentNumbers :: IO ()
+componentNumbers = do
+  g <- readUndirected
+  let (k, cid) = componentIds g
+  print k -- 成分の数
+  print (cid U.! 0 == cid U.! 1) -- 頂点 0 と 1 が同じ成分か
+  d <- readDirected
+  print (fst (componentIds d)) -- 弱連結成分の数
+
+-- | 連結成分ごとの部分グラフ: 'splitComponents'。
 --
 -- 成分ごとの @(部分グラフ, 元の頂点番号)@ と、頂点ごとの
 -- @(成分番号, 成分の中での番号)@ を返す。成分は小さい頂点を含むものから。
@@ -199,47 +213,68 @@ components = do
     print (numVertices sub, U.toList (U.map (+ 1) vertices))
   print (loc U.! 0) -- 頂点 0 の (成分番号, 成分内の番号)
 
--- | 強連結成分: 'splitStrongComponents'。
+-- | 強連結成分: 'strongComponentIds'。
 --
 -- 成分はトポロジカル順に並ぶ (辺 @u -> v@ なら @u@ の成分番号 <= @v@ の成分番号)。
--- 縮約してから DAG の DP にかけるのが定番。
+-- 部分グラフも要るなら 'splitStrongComponents'。
 stronglyConnected :: IO ()
 stronglyConnected = do
   g <- readDirected
-  let (comps, loc) = splitStrongComponents g
-  print (V.length comps)
-  print (fst (loc U.! 0) == fst (loc U.! 1)) -- 同じ強連結成分か
+  let (k, scc) = strongComponentIds g
+  print k
+  print (scc U.! 0 == scc U.! 1) -- 同じ強連結成分か
 
 -- | 成分を 1 頂点に縮める: 'condense'。
 --
--- 'splitStrongComponents' の @loc@ を渡すと、成分をまたぐ辺だけを残した
--- グラフになる。これは DAG なので 'topologicalOrder' が通る。
+-- 成分番号を渡すと、成分をまたぐ辺だけを残したグラフになる。強連結成分なら
+-- DAG なので、'topologicalOrder' の順に DP できる (縮めた頂点の番号は成分番号)。
+-- ここでは各成分の頂点数を重みにして、通る頂点数が最大の道を求める。
 condensed :: IO ()
 condensed = do
   g <- readDirected
-  let (_, loc) = splitStrongComponents g
-      dag = condense loc g
+  let ids@(k, scc) = strongComponentIds g
+      dag = condense ids g
+      size = U.accumulate (+) (U.replicate k 0) (U.map (\c -> (c, 1 :: Int)) scc)
+      -- 成分の番号がトポロジカル順なので、後ろから DP すればよい。
+      best = V.constructrN k $ \done ->
+        let c = k - 1 - V.length done
+            next = [V.unsafeIndex done (k - 1 - d) | d <- U.toList (adjacentVertices dag c)]
+         in size U.! c + maximum (0 : next)
   print (numVertices dag)
-  print (topologicalOrder dag)
+  print (V.maximum (V.cons 0 best))
 
--- | 橋と関節点: 'bridges' / 'articulationPoints'。
+-- | 多重辺を除く: 'simplifyGraph'。
 --
--- どちらも昇順、O(n + m)。橋は @(u, v)@ で @u < v@。
+-- 'condense' は成分をまたぐ辺を全部残すので、縮めた後の次数を数えるときは
+-- 先に単純グラフにする。同じ向きの辺は重みが最小の 1 本だけ残り、自己ループも消える。
+condensedDegrees :: IO ()
+condensedDegrees = do
+  g <- readDirected
+  let ids = strongComponentIds g
+      dag = simplifyGraph (condense ids g)
+  print [outDegree dag c | c <- [0 .. numVertices dag - 1]]
+
+-- | 橋と関節点: 'bridgeEdges' / 'articulationPoints'。
+--
+-- どちらも昇順、O(n + m)。橋は @(u, v)@ で @u < v@。無向グラフ用 (有向グラフは 'error')。
 bridgesAndPoints :: IO ()
 bridgesAndPoints = do
   g <- readUndirected
-  print (bridges g)
+  print (bridgeEdges g)
   print (articulationPoints g)
 
--- | 橋を除いた連結成分 (二重辺連結成分): 'splitBridgeComponents'。
+-- | 橋を除いた連結成分 (二重辺連結成分): 'bridgeComponentIds'。
 --
 -- 同じ成分の 2 頂点は、どの 1 本の辺を切っても繋がったままでいられる。
+-- 'condense' すると、橋を辺とする木 (非連結なら森) になる。
 twoEdgeConnected :: IO ()
 twoEdgeConnected = do
   g <- readUndirected
-  let (comps, loc) = splitBridgeComponents g
-  print (V.length comps)
-  print (loc U.! 0)
+  let ids@(k, cid) = bridgeComponentIds g
+      tree = condense ids g
+  print k
+  print (cid U.! 0)
+  print (numVertices tree, length (graphEdges tree) `div` 2) -- 頂点数と、橋の本数
 
 -- | 二重頂点連結成分: 'splitBiconnectedComponents'。
 --
@@ -251,6 +286,21 @@ twoVertexConnected = do
   let (comps, places) = splitBiconnectedComponents g
   print (V.length comps)
   print (places V.! 0)
+
+-- | ブロックカット木: 'blockCutTree'。
+--
+-- 頂点 @0 .. n - 1@ は元の頂点、@n + b@ は @b@ 番目の二重頂点連結成分。
+-- 元のグラフで u から v へのどの道も通る頂点は、この木の u - v の道にある元の頂点。
+-- ここでは頂点 0 から各頂点へ、必ず通る頂点 (両端を含む) の数を出す。
+blockCut :: IO ()
+blockCut = do
+  g <- readUndirected
+  let n = numVertices g
+      t = blockCutTree g
+      -- 木の上の道は、元の頂点と成分の頂点が交互に並ぶ。
+      d = bfsDist t [0]
+  print (numVertices t - n) -- 成分の数
+  print [if d U.! v < 0 then -1 else d U.! v `div` 2 + 1 | v <- [0 .. n - 1]]
 
 -- | 木の親と深さ: 'treeParentDepth'。
 --
@@ -279,17 +329,26 @@ diameter = do
   let (len, u, v) = treeDiameter g
   print (len, u + 1, v + 1)
 
--- | 辺を通ってよいかを見ながら連結成分の番号を振る: 'componentIdsBy'。
+-- | 条件を満たす辺だけの連結成分: 'componentIdsWith'。
 --
--- 「重みが K 以下の辺だけで繋がっているか」のような条件付きの連結性。
--- 返り値の @(成分数, 頂点ごとの番号)@ は 'partsFromIds' に渡せる。
+-- 条件は @u v 重み@ を受け取る。「重みが K 以下の辺だけで繋がっているか」のような
+-- 条件付きの連結性に使う。番号を 'splitByIds' に渡せば部分グラフも作れる。
 conditionalComponents :: IO ()
 conditionalComponents = do
-  g <- readDirected
-  let ids = componentIdsBy g (\u v -> u /= v) -- ここでは全ての辺を通す
-      (comps, loc) = partsFromIds g ids
-  print (fst ids, V.length comps)
-  print (loc U.! 0)
+  g <- readWeightedUndirected
+  [k] <- ints
+  let ids@(c, cid) = componentIdsWith (\_ _ w -> w <= k) g
+      (comps, _) = splitByIds ids g
+  print c
+  print (cid U.! 0 == cid U.! 1) -- 重み k 以下の辺だけで 0 から 1 へ行けるか
+  print (V.length comps)
+
+-- | 重み付きの無向グラフを読む。幅 3 で @u v w@。
+readWeightedUndirected :: IO AtcGraph
+readWeightedUndirected = do
+  [_, m] <- ints
+  es <- getIntGrid 3 m :: IO (Grid U.Vector Int)
+  pure (undirectedGraph (fromOneBased es))
 
 -- | 入力のグリッドを辺のリストに直す: 'edgesOfGrid' と 'vertexCountOf'。
 --
@@ -305,18 +364,20 @@ edgeList = do
   print (vertexCountOf arcs') -- 辺に出てくる最大の番号 + 1
   print (numVertices (graphFromList n (U.toList arcs')))
 
--- | DFS 木を自分で見る: 'lowlink' と 'isBridgeArc'。
+-- | DFS 木を自分で見る: 'dfsLowlink' と 'isBridgeArc'。
 --
--- 'bridges' / 'articulationPoints' / 'splitBridgeComponents' はこの
+-- 'bridgeEdges' / 'articulationPoints' / 'bridgeComponentIds' はこの
 -- 'Lowlink' を使っている。独自の条件で橋を数えたいときに直に呼ぶ。
+-- 中身はフィールド 'llOrder' (訪問順) / 'llLow' / 'llParent' (DFS 木の親) などで取り出す。
 lowlinkByHand :: IO ()
 lowlinkByHand = do
-  g <- readUndirected
-  let link = lowlink g
-      -- 重みが 10 以上の橋だけ。条件を付けないなら 'bridges' と同じ結果。
+  g <- readWeightedUndirected
+  let link = dfsLowlink g
+      -- 重みが 10 以上の橋だけ。条件を付けないなら 'bridgeEdges' と同じ結果。
       heavy = [(u, v) | (u, v, w) <- graphEdges g, u < v, w >= 10, isBridgeArc link u v]
   print heavy
-  print (bridges g)
+  print (bridgeEdges g)
+  print (U.toList (llParent link)) -- DFS 木の親
 
 -- | 'Lowlink' を受け取る関数を書く。
 --

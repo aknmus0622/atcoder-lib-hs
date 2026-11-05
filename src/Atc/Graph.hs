@@ -35,6 +35,7 @@
 -- > dist U.! (n - 1)                 -- 届かなければ -1
 -- > map (+ 1) (pathTo prev (n - 1))  -- 0 から n - 1 への経路 (届くときだけ)
 --
+-- > let (k, cid) = componentIds g          -- 連結成分の数と、頂点ごとの成分番号
 -- > let (comps, loc) = splitComponents g   -- 連結成分ごとの部分グラフと番号の対応
 --
 -- == 不変版と可変版で同じ関数
@@ -48,7 +49,7 @@
 -- > adjacent g v             Vector         m Vector       O(次数)    (adjacentVertices / adjacentWeights も同じ)
 -- > addGraphEdges g es       AtcGraph       m ()           足す辺の数
 -- > addGraphVertices g k     AtcGraph       m ()           O(k)
--- > reverseGraph g           AtcGraph       m (MGraph m)   O(n + m)   (condense も同じ)
+-- > reverseGraph g           AtcGraph       m (MGraph m)   O(n + m)   (condense / blockCutTree / simplifyGraph も同じ)
 -- > bfsDist g s など         a              m a            変換 O(n + m) + 本体
 --
 -- 'graphDirection' は両方とも純粋な関数。残りの関数 (探索・分解・木など) も共通で、
@@ -78,21 +79,19 @@
 -- == 名前
 --
 -- @atc bundle@ は解答と 1 ファイルにまとめるので、解答側で自前定義しがちな名前
--- (@bfs@, @dijkstra@ …) や "Data.Graph" の名前 (@graphFromEdges@, @components@,
--- @scc@, @topSort@ …) は避けている。
+-- (@bfs@, @dijkstra@, @bridges@, @lowlink@ …) や "Data.Graph" の名前 (@graphFromEdges@,
+-- @components@, @scc@, @topSort@ …) は避けている。
 module Atc.Graph where
 
 import Atc.Grid (Grid (..), ZeroBased (..))
-import Atc.UnionFind (newUF, uniteUF)
+import Atc.UnionFind (newUF, rootUF, uniteUF)
 import Control.Monad (foldM, forM_, when)
 import Control.Monad.Primitive (PrimMonad, PrimState)
 import Control.Monad.ST (ST, runST)
-import qualified Data.Foldable as F
 import qualified Data.Graph as DG
 import Data.Primitive.MutVar (MutVar, newMutVar, readMutVar, writeMutVar)
-import Data.List (sort, sortBy)
 import Data.Ord (comparing)
-import Data.STRef (modifySTRef', newSTRef, readSTRef, writeSTRef)
+import Data.STRef (newSTRef, readSTRef, writeSTRef)
 import qualified Data.Vector.Algorithms.Intro as Intro
 import qualified Data.Vector as V
 import qualified Data.Vector.Generic as G
@@ -239,7 +238,7 @@ instance GraphKind AtcGraph where
   {-# INLINE adjacentVertices #-}
   adjacentWeights (AtcGraph _ off _ w _) v = U.slice (off U.! v) (off U.! (v + 1) - off U.! v) w
   {-# INLINE adjacentWeights #-}
-  addGraphEdges g@(AtcGraph n _ tgt wt dir) es = buildCSR dir n (U.zip3 (arcSources g) tgt wt U.++ new)
+  addGraphEdges g@(AtcGraph n _ tgt wt dir) es = buildCSR dir n (U.zip3 (grArcSources g) tgt wt U.++ new)
     where
       new = (if dir == Undirected then bothWays else id) (U.fromList es)
   addGraphVertices (AtcGraph n off tgt wt dir) k
@@ -736,7 +735,19 @@ topologicalOrderC g@(AtcGraph n _ tgt _ _) = runST $ do
 -- ---------------------------------------------------------------------
 -- 分解
 --
--- 成分ごとの部分グラフと、頂点番号の対応を返す。
+-- 成分への分け方は、まず頂点ごとの成分番号 @(成分の数, 元の番号 → 成分の番号)@ として求める
+-- ('componentIds' / 'strongComponentIds' / 'bridgeComponentIds' / 'componentIdsWith')。
+-- 番号だけなら O(n + m) で、部分グラフは作らない。部分グラフが要るときは 'splitByIds'、
+-- 成分を 1 頂点に縮めるときは 'condense' に渡す。
+--
+-- > let ids@(k, cid) = strongComponentIds g
+-- > k                                    -- 成分の数
+-- > cid U.! u == cid U.! v               -- u と v が同じ成分か
+-- > let dag = condense ids g             -- 縮めたグラフ (強連結成分なら DAG)
+-- > let (comps, loc) = splitByIds ids g  -- 成分ごとの部分グラフ
+--
+-- 'splitComponents' / 'splitStrongComponents' / 'splitBridgeComponents' は、番号を振って
+-- 'splitByIds' に渡すまでを 1 回で行う。返り値は次の 2 つ。
 --
 -- * 1 つ目: 成分ごとの @(部分グラフ, 部分の番号 → 元の番号)@。
 --   成分の中の番号は元の番号の小さい順に振る (なので 2 つ目の Vector は昇順)。
@@ -748,154 +759,124 @@ topologicalOrderC g@(AtcGraph n _ tgt _ _) = runST $ do
 -- > fst (loc U.! u) == fst (loc U.! v)            -- u と v が同じ成分か
 -- > V.forM_ comps $ \(sub, orig) -> ...           -- 部分の頂点 i は元の orig U.! i
 --
--- 'splitComponents' / 'splitBridgeComponents' / 'splitBiconnectedComponents' /
--- 'bridges' / 'articulationPoints' は無向グラフ用 (両向きの辺が入っていること)。
+-- 'bridgeComponentIds' / 'splitBridgeComponents' / 'splitBiconnectedComponents' /
+-- 'blockCutTree' / 'bridgeEdges' / 'articulationPoints' / 'dfsLowlink' は無向グラフ用で、
+-- 有向グラフを渡すと 'error'。'undirectedGraph' などで無向グラフとして作る
+-- (有向グラフに両向きの辺を入れたものは有向グラフのまま)。
 
--- | 連結成分。成分は小さい頂点を含むものから。O(n + m)。
-{-# INLINE splitComponents #-}
-splitComponents :: (GraphKind g) => g -> GraphRet g (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
-splitComponents g = primGraph g splitComponentsC
+-- | 連結成分の番号 @(成分の数, 元の番号 → 成分の番号)@。成分は小さい頂点を含むものから。
+-- 有向グラフでは向きを無視して数える (弱連結成分)。O(n + m)。
+{-# INLINE componentIds #-}
+componentIds :: (GraphKind g) => g -> GraphRet g (Int, U.Vector Int)
+componentIds g = primGraph g componentIdsC
 
-splitComponentsC :: AtcGraph -> (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
-splitComponentsC g = partsFromIds g (componentIdsBy g (\_ _ -> True))
+componentIdsC :: AtcGraph -> (Int, U.Vector Int)
+componentIdsC = componentIdsWithC (\_ _ _ -> True)
 
--- | 強連結成分。成分はトポロジカル順 (辺 @u -> v@ なら @u@ の成分番号 <= @v@ の成分番号)。
--- 'condense' すると DAG になる。O(n + m)。
-{-# INLINE splitStrongComponents #-}
-splitStrongComponents :: (GraphKind g) => g -> GraphRet g (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
-splitStrongComponents g = primGraph g splitStrongComponentsC
+-- | @componentIdsWith ok g@: @ok u v 重み@ が真の辺だけを使った連結成分の番号。
+-- 「重みが K 以下の辺だけで繋がっているか」のような条件付きの連結性に使う。
+-- 番号の振り方は 'componentIds' と同じ。有向グラフでも向きを無視する。
+-- 無向グラフでは各辺が両向き (@ok u v w@ と @ok v u w@) で呼ばれ、どちらかが真なら使う。
+-- O(n + m α(n))。
+{-# INLINE componentIdsWith #-}
+componentIdsWith :: (GraphKind g) => (Int -> Int -> Int -> Bool) -> g -> GraphRet g (Int, U.Vector Int)
+componentIdsWith ok g = primGraph g (componentIdsWithC ok)
 
-splitStrongComponentsC :: AtcGraph -> (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
-splitStrongComponentsC g = partsFromIds g (length comps, ids)
+componentIdsWithC :: (Int -> Int -> Int -> Bool) -> AtcGraph -> (Int, U.Vector Int)
+componentIdsWithC ok g@(AtcGraph n _ tgt wt _) = runST $ do
+  uf <- newUF n
+  U.forM_ (U.zip3 (grArcSources g) tgt wt) $ \(u, v, c) ->
+    when (ok u v c) $ do
+      _ <- uniteUF u v uf
+      pure ()
+  roots <- U.generateM n (\v -> rootUF v uf)
+  pure (grNumberRoots roots)
+
+-- | 強連結成分の番号。成分はトポロジカル順 (辺 @u -> v@ なら @u@ の番号 <= @v@ の番号) で、
+-- 'condense' すると DAG になる。無向グラフでは連結成分になる。O(n + m)。
+{-# INLINE strongComponentIds #-}
+strongComponentIds :: (GraphKind g) => g -> GraphRet g (Int, U.Vector Int)
+strongComponentIds g = primGraph g strongComponentIdsC
+
+-- Tarjan 法。再帰の代わりに、呼び出しのスタック cs と頂点ごとの次に見る辺 it を持つ。
+-- 成分は吸い込む側 (逆トポロジカル順) から決まるので、最後に番号を反転する。
+strongComponentIdsC :: AtcGraph -> (Int, U.Vector Int)
+strongComponentIdsC (AtcGraph n off tgt _ _) = runST $ do
+  ordM <- UM.replicate n (-1 :: Int)
+  lowM <- UM.unsafeNew n
+  compM <- UM.replicate n (-1)
+  itM <- UM.unsafeNew n
+  stk <- UM.unsafeNew n -- 成分が決まっていない頂点
+  cs <- UM.unsafeNew n
+  let enter !t !sp !csp !k v = do
+        UM.unsafeWrite ordM v t
+        UM.unsafeWrite lowM v t
+        UM.unsafeWrite stk sp v
+        UM.unsafeWrite cs csp v
+        UM.unsafeWrite itM v (U.unsafeIndex off v)
+        go (t + 1) (sp + 1) (csp + 1) k
+      go !t !sp !csp !k
+        | csp == 0 = pure (t, k)
+        | otherwise = do
+            v <- UM.unsafeRead cs (csp - 1)
+            i <- UM.unsafeRead itM v
+            if i < U.unsafeIndex off (v + 1)
+              then do
+                UM.unsafeWrite itM v (i + 1)
+                let w = U.unsafeIndex tgt i
+                o <- UM.unsafeRead ordM w
+                if o == -1
+                  then enter t sp csp k w
+                  else do
+                    c <- UM.unsafeRead compM w
+                    when (c == -1) $ UM.unsafeModify lowM (min o) v
+                    go t sp csp k
+              else do
+                lv <- UM.unsafeRead lowM v
+                ov <- UM.unsafeRead ordM v
+                when (csp >= 2) $ do
+                  p <- UM.unsafeRead cs (csp - 2)
+                  UM.unsafeModify lowM (min lv) p
+                if lv == ov
+                  then do
+                    sp' <- popTo k v sp
+                    go t sp' (csp - 1) (k + 1)
+                  else go t sp (csp - 1) k
+      popTo k v sp = do
+        x <- UM.unsafeRead stk (sp - 1)
+        UM.unsafeWrite compM x k
+        if x == v then pure (sp - 1) else popTo k v (sp - 1)
+      outer (!t, !k) r = do
+        o <- UM.unsafeRead ordM r
+        if o /= -1 then pure (t, k) else enter t 0 0 k r
+  (_, k) <- foldM outer (0, 0) [0 .. n - 1]
+  comp <- U.unsafeFreeze compM
+  pure (k, U.map (\c -> k - 1 - c) comp)
+
+-- | 二重辺連結成分 (橋を除いた後の連結成分) の番号。成分は小さい頂点を含むものから。
+-- 'condense' すると橋の木 (非連結なら森) になる。無向グラフ用。O(n + m)。
+{-# INLINE bridgeComponentIds #-}
+bridgeComponentIds :: (GraphKind g) => g -> GraphRet g (Int, U.Vector Int)
+bridgeComponentIds g = primGraph g bridgeComponentIdsC
+
+bridgeComponentIdsC :: AtcGraph -> (Int, U.Vector Int)
+bridgeComponentIdsC g0 = componentIdsWithC (\u v _ -> not (isBridgeArc ll u v)) g
   where
-    -- DG.scc は逆トポロジカル順に返す。
-    comps = reverse (DG.scc (toDataGraph g))
-    ids =
-      U.update
-        (U.replicate (numVertices g) 0)
-        (U.fromList [(v, c) | (c, t) <- zip [0 ..] comps, v <- F.toList t])
+    g = grRequireUndirected "bridgeComponentIds" g0
+    ll = grLowlink g
 
--- | 二重辺連結成分 (橋を除いた後の連結成分)。成分は小さい頂点を含むものから。
--- 'condense' すると橋の木 (非連結なら森) になる。O(n + m)。
-{-# INLINE splitBridgeComponents #-}
-splitBridgeComponents :: (GraphKind g) => g -> GraphRet g (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
-splitBridgeComponents g = primGraph g splitBridgeComponentsC
+-- | 成分番号 @(成分の数, 元の番号 → 成分の番号)@ から、成分ごとの部分グラフを作る。
+-- 返り値は 'splitComponents' と同じ形。番号は 0 以上・成分の数未満で、
+-- 頂点数と長さが違えば 'error'。番号は自分で振ったものでもよい。O(n + m)。
+{-# INLINE splitByIds #-}
+splitByIds :: (GraphKind g) => (Int, U.Vector Int) -> g -> GraphRet g (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
+splitByIds ids g = primGraph g (splitByIdsC ids)
 
-splitBridgeComponentsC :: AtcGraph -> (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
-splitBridgeComponentsC g = partsFromIds g (componentIdsBy g (\u v -> not (isBridgeArc ll u v)))
+splitByIdsC :: (Int, U.Vector Int) -> AtcGraph -> (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
+splitByIdsC ids g0 = (grBuildParts g verts arcComp, loc)
   where
-    ll = lowlink g
-
--- | 二重頂点連結成分。関節点は複数の成分に入るので、2 つ目は元の番号 → 入っている
--- @(成分の番号, 部分の番号)@ 全部 (成分の番号の昇順)。関節点でなければ長さ 1。
---
--- どの辺もちょうど 1 つの成分に入る。辺のない頂点はそれだけで 1 つの成分になり、
--- 自己ループはその頂点を含む成分のどれかに入る。
--- 成分は、頂点 (昇順) の並びの辞書順。O((n + m) log n)。
-{-# INLINE splitBiconnectedComponents #-}
-splitBiconnectedComponents :: (GraphKind g) => g -> GraphRet g (V.Vector (AtcGraph, U.Vector Int), V.Vector [(Int, Int)])
-splitBiconnectedComponents g = primGraph g splitBiconnectedComponentsC
-
-splitBiconnectedComponentsC :: AtcGraph -> (V.Vector (AtcGraph, U.Vector Int), V.Vector [(Int, Int)])
-splitBiconnectedComponentsC g@(AtcGraph n _ tgt _ _) = (buildParts g verts arcComp, loc)
-  where
-    Lowlink ordv _ _ blocks home = lowlink g
-    sorted = V.fromList (map (U.modify Intro.sort) blocks)
-    k = V.length sorted
-    -- 新しい順に並べた、作った順の番号
-    perm = sortBy (comparing (sorted V.!)) [0 .. k - 1]
-    newId = U.update (U.replicate k 0) (U.fromList (zip perm [0 ..]))
-    verts = V.fromList (map (sorted V.!) perm)
-    -- 辺 u - w は、DFS 木で深い方の頂点の home の成分に入る
-    -- (木の辺も後退辺も、深い方へ入る木の辺と同じ成分)。
-    arcComp =
-      U.zipWith
-        (\u w -> newId U.! (home U.! (if ordv U.! w > ordv U.! u then w else u)))
-        (arcSources g)
-        tgt
-    loc =
-      V.accum
-        (flip (:))
-        (V.replicate n [])
-        [(v, (c, i)) | c <- [k - 1, k - 2 .. 0], (i, v) <- U.toList (U.indexed (verts V.! c))]
-
--- | 橋 @(u, v)@ (@u < v@)。昇順。O(n + m)。
-{-# INLINE bridges #-}
-bridges :: (GraphKind g) => g -> GraphRet g ([(Int, Int)])
-bridges g = primGraph g bridgesC
-
-bridgesC :: AtcGraph -> [(Int, Int)]
-bridgesC g =
-  sort [(min p v, max p v) | v <- [0 .. numVertices g - 1], let p = par U.! v, p /= -1, low U.! v > ordv U.! p]
-  where
-    Lowlink ordv low par _ _ = lowlink g
-
--- | 関節点 (取り除くと連結成分が増える頂点)。昇順。O(n + m)。
-{-# INLINE articulationPoints #-}
-articulationPoints :: (GraphKind g) => g -> GraphRet g ([Int])
-articulationPoints g = primGraph g articulationPointsC
-
-articulationPointsC :: AtcGraph -> [Int]
-articulationPointsC g = [v | v <- [0 .. n - 1], cut U.! v || rootKids U.! v >= 2]
-  where
-    n = numVertices g
-    Lowlink ordv low par _ _ = lowlink g
-    kids = [(p, c) | c <- [0 .. n - 1], let p = par U.! c, p /= -1]
-    -- 根でない頂点は、子の low が自分の訪問順以上なら関節点。根は子が 2 つ以上なら。
-    cut = U.accumulate (||) (U.replicate n False) (U.fromList [(p, True) | (p, c) <- kids, par U.! p /= -1, low U.! c >= ordv U.! p])
-    rootKids = U.accumulate (+) (U.replicate n (0 :: Int)) (U.fromList [(p, 1) | (p, _) <- kids, par U.! p == -1])
-
--- | 成分を 1 頂点に縮める。成分をまたぐ辺だけを (重み付きのまま、多重辺もそのまま) 残す。
--- 'splitComponents' / 'splitStrongComponents' / 'splitBridgeComponents' の 2 つ目を渡す。O(n + m)。
-{-# INLINE condense #-}
-condense :: (GraphKind g, G.Vector v (Int, Int)) => v (Int, Int) -> g -> GraphRet g g
-condense loc g = primGraphNew g (condenseC loc)
-
-condenseC :: (G.Vector v (Int, Int)) => v (Int, Int) -> AtcGraph -> AtcGraph
-condenseC loc g@(AtcGraph _ _ tgt wt _) = buildCSR (graphDirection g) k (U.filter (\(a, b, _) -> a /= b) es)
-  where
-    k = if G.null loc then 0 else 1 + G.foldl' (\x (c, _) -> max x c) 0 loc
-    es = U.zipWith3 (\u v c -> (fst (loc G.! u), fst (loc G.! v), c)) (arcSources g) tgt wt
-
--- 各辺の出発点。
-arcSources :: AtcGraph -> U.Vector Int
-arcSources (AtcGraph n off _ _ _) = U.create $ do
-  out <- UM.unsafeNew (U.last off)
-  rep n $ \u -> do
-    let s = U.unsafeIndex off u
-    UM.set (UM.unsafeSlice s (U.unsafeIndex off (u + 1) - s) out) u
-  pure out
-
--- 辺 u - v を通ってよいかを見ながら、無向グラフの連結成分の番号を振る。
--- 番号は小さい頂点を含む成分ほど小さい。
-componentIdsBy :: AtcGraph -> (Int -> Int -> Bool) -> (Int, U.Vector Int)
-componentIdsBy g ok = runST $ do
-  ids <- UM.replicate n (-1)
-  que <- UM.unsafeNew n
-  let paint c s = do
-        UM.unsafeWrite ids s c
-        UM.unsafeWrite que 0 s
-        let go !hd !tl = when (hd < tl) $ do
-              v <- UM.unsafeRead que hd
-              U.foldM' (visit c v) tl (targetsOf g v) >>= go (hd + 1)
-        go 0 (1 :: Int)
-      visit c v !tl u = do
-        x <- UM.unsafeRead ids u
-        if x /= -1 || not (ok v u)
-          then pure tl
-          else UM.unsafeWrite ids u c >> UM.unsafeWrite que tl u >> pure (tl + 1)
-      step !c s = do
-        x <- UM.unsafeRead ids s
-        if x /= -1 then pure c else paint c s >> pure (c + 1)
-  k <- foldM step 0 [0 .. n - 1]
-  (,) k <$> U.unsafeFreeze ids
-  where
-    n = numVertices g
-
--- 成分数と頂点ごとの成分番号から、分解の結果を作る。
-partsFromIds :: AtcGraph -> (Int, U.Vector Int) -> (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
-partsFromIds g@(AtcGraph n _ tgt _ _) (k, cid) = (buildParts g verts arcComp, loc)
-  where
+    g@(AtcGraph n _ tgt _ _) = grCheckIds "splitByIds" ids g0
+    (k, cid) = ids
     cnt = U.accumulate (+) (U.replicate k 0) (U.map (\c -> (c, 1)) cid)
     voff = U.scanl' (+) 0 cnt
     -- 頂点を成分ごとに、番号の小さい順に並べる。
@@ -910,125 +891,408 @@ partsFromIds g@(AtcGraph n _ tgt _ _) (k, cid) = (buildParts g verts arcComp, lo
     verts = V.generate k (\c -> U.slice (voff U.! c) (cnt U.! c) grouped)
     posOf = U.update (U.replicate n 0) (U.imap (flip (,)) grouped)
     loc = U.imap (\v c -> (c, posOf U.! v - voff U.! c)) cid
-    arcComp = U.zipWith (\u w -> let c = cid U.! u in if c == cid U.! w then c else -1) (arcSources g) tgt
+    arcComp = U.zipWith (\u w -> let c = cid U.! u in if c == cid U.! w then c else -1) (grArcSources g) tgt
+
+-- | 連結成分 ('componentIds') ごとの部分グラフ。返り値は節の説明を参照。O(n + m)。
+{-# INLINE splitComponents #-}
+splitComponents :: (GraphKind g) => g -> GraphRet g (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
+splitComponents g = primGraph g splitComponentsC
+
+splitComponentsC :: AtcGraph -> (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
+splitComponentsC g = splitByIdsC (componentIdsC g) g
+
+-- | 強連結成分 ('strongComponentIds') ごとの部分グラフ。成分はトポロジカル順。O(n + m)。
+{-# INLINE splitStrongComponents #-}
+splitStrongComponents :: (GraphKind g) => g -> GraphRet g (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
+splitStrongComponents g = primGraph g splitStrongComponentsC
+
+splitStrongComponentsC :: AtcGraph -> (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
+splitStrongComponentsC g = splitByIdsC (strongComponentIdsC g) g
+
+-- | 二重辺連結成分 ('bridgeComponentIds') ごとの部分グラフ。無向グラフ用。O(n + m)。
+{-# INLINE splitBridgeComponents #-}
+splitBridgeComponents :: (GraphKind g) => g -> GraphRet g (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
+splitBridgeComponents g = primGraph g splitBridgeComponentsC
+
+splitBridgeComponentsC :: AtcGraph -> (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
+splitBridgeComponentsC g0 = splitByIdsC (bridgeComponentIdsC g) g
+  where
+    g = grRequireUndirected "splitBridgeComponents" g0
+
+-- | 二重頂点連結成分。関節点は複数の成分に入るので、2 つ目は元の番号 → 入っている
+-- @(成分の番号, 部分の番号)@ 全部 (成分の番号の昇順)。関節点でなければ長さ 1。
+--
+-- どの辺もちょうど 1 つの成分に入る。辺のない頂点はそれだけで 1 つの成分になり、
+-- 自己ループはその頂点を含む成分のどれかに入る。
+-- 成分は、頂点 (昇順) の並びの辞書順。縮めるときは 'blockCutTree'。
+-- 無向グラフ用。O((n + m) log n)。
+{-# INLINE splitBiconnectedComponents #-}
+splitBiconnectedComponents :: (GraphKind g) => g -> GraphRet g (V.Vector (AtcGraph, U.Vector Int), V.Vector [(Int, Int)])
+splitBiconnectedComponents g = primGraph g splitBiconnectedComponentsC
+
+splitBiconnectedComponentsC :: AtcGraph -> (V.Vector (AtcGraph, U.Vector Int), V.Vector [(Int, Int)])
+splitBiconnectedComponentsC g0 = (grBuildParts g verts arcComp, loc)
+  where
+    g = grRequireUndirected "splitBiconnectedComponents" g0
+    (verts, arcComp) = grBiconnected g
+    k = V.length verts
+    loc =
+      V.accum
+        (flip (:))
+        (V.replicate (numVertices g) [])
+        [(v, (c, i)) | c <- [k - 1, k - 2 .. 0], (i, v) <- U.toList (U.indexed (verts V.! c))]
+
+-- | ブロックカット木。二重頂点連結成分を頂点にして、元の頂点とそれを含む成分を結ぶ。
+-- 頂点 @0 .. n - 1@ は元の頂点、@n + b@ は 'splitBiconnectedComponents' の @b@ 番目の成分
+-- (成分の数は @numVertices t - n@)。辺は重み 1 の無向。
+--
+-- 関節点は 2 つ以上の成分と結ばれ、それ以外の頂点は 1 つの成分とだけ結ばれる (葉になる)。
+-- 元が連結なら木、そうでなければ森。「u から v へのどの道も通る頂点」は、
+-- この木の u - v の道にある元の頂点。無向グラフ用。O((n + m) log n)。
+{-# INLINE blockCutTree #-}
+blockCutTree :: (GraphKind g) => g -> GraphRet g g
+blockCutTree g = primGraphNew g blockCutTreeC
+
+blockCutTreeC :: AtcGraph -> AtcGraph
+blockCutTreeC g0 = buildCSR Undirected (n + V.length verts) (bothWays es)
+  where
+    g = grRequireUndirected "blockCutTree" g0
+    n = numVertices g
+    (verts, _) = grBiconnected g
+    es = U.create $ do
+      out <- UM.unsafeNew (V.sum (V.map U.length verts))
+      let go !i b = when (b < V.length verts) $ do
+            let vs = V.unsafeIndex verts b
+            rep (U.length vs) $ \j -> UM.unsafeWrite out (i + j) (U.unsafeIndex vs j, n + b, 1)
+            go (i + U.length vs) (b + 1)
+      go 0 0
+      pure out
+
+-- | 橋 @(u, v)@ (@u < v@)。昇順。無向グラフ用。O(n + m)。
+{-# INLINE bridgeEdges #-}
+bridgeEdges :: (GraphKind g) => g -> GraphRet g ([(Int, Int)])
+bridgeEdges g = primGraph g bridgeEdgesC
+
+bridgeEdgesC :: AtcGraph -> [(Int, Int)]
+bridgeEdgesC g0 = U.toList (U.modify Intro.sort (U.map edge (U.filter isBridge (U.enumFromN 0 (numVertices g)))))
+  where
+    -- 橋は DFS 木の辺 (親 p - 子 v) で、v の下から p 以上へ戻れないもの。
+    isBridge v = let p = par U.! v in p /= -1 && low U.! v > ordv U.! p
+    edge v = let p = par U.! v in (min p v, max p v)
+    g = grRequireUndirected "bridgeEdges" g0
+    Lowlink {llOrder = ordv, llLow = low, llParent = par} = grLowlink g
+
+-- | 関節点 (取り除くと連結成分が増える頂点)。昇順。無向グラフ用。O(n + m)。
+{-# INLINE articulationPoints #-}
+articulationPoints :: (GraphKind g) => g -> GraphRet g ([Int])
+articulationPoints g = primGraph g articulationPointsC
+
+articulationPointsC :: AtcGraph -> [Int]
+articulationPointsC g0 = U.toList (U.findIndices (>= 2) score)
+  where
+    g = grRequireUndirected "articulationPoints" g0
+    n = numVertices g
+    Lowlink {llOrder = ordv, llLow = low, llParent = par} = grLowlink g
+    -- 根でない頂点は、子の low が自分の訪問順以上なら関節点 (2 点にする)。
+    -- 根は子 1 つにつき 1 点で、子が 2 つ以上なら関節点。
+    score = U.create $ do
+      sc <- UM.replicate n (0 :: Int)
+      rep n $ \c -> do
+        let p = U.unsafeIndex par c
+        when (p /= -1) $
+          if U.unsafeIndex par p == -1
+            then UM.unsafeModify sc (+ 1) p
+            else when (U.unsafeIndex low c >= U.unsafeIndex ordv p) $ UM.unsafeWrite sc p 2
+      pure sc
+
+-- | 成分を 1 頂点に縮める。@ids@ は成分番号 @(成分の数, 元の番号 → 成分の番号)@
+-- ('componentIds' / 'strongComponentIds' / 'bridgeComponentIds' など)。
+-- 成分をまたぐ辺だけを (重み付きのまま、多重辺もそのまま) 残す。多重辺は 'simplifyGraph' で除ける。
+-- 頂点数と長さが違えば 'error'。O(n + m)。
+{-# INLINE condense #-}
+condense :: (GraphKind g) => (Int, U.Vector Int) -> g -> GraphRet g g
+condense ids g = primGraphNew g (condenseC ids)
+
+condenseC :: (Int, U.Vector Int) -> AtcGraph -> AtcGraph
+condenseC ids g0 = buildCSR (graphDirection g) k (U.filter (\(a, b, _) -> a /= b) es)
+  where
+    g@(AtcGraph _ _ tgt wt _) = grCheckIds "condense" ids g0
+    (k, cid) = ids
+    es = U.zipWith3 (\u v c -> (cid U.! u, cid U.! v, c)) (grArcSources g) tgt wt
+
+-- | 単純グラフにする。自己ループを除き、同じ向きの多重辺は重みが最小の 1 本だけ残す。
+-- 無向グラフでも、各辺が 1 本ずつになる。隣接は行き先の昇順になる。O(n + m log m)。
+{-# INLINE simplifyGraph #-}
+simplifyGraph :: (GraphKind g) => g -> GraphRet g g
+simplifyGraph g = primGraphNew g simplifyGraphC
+
+simplifyGraphC :: AtcGraph -> AtcGraph
+simplifyGraphC g@(AtcGraph n _ tgt wt dir) = buildCSR dir n (U.ifilter keep sorted)
+  where
+    sorted = U.modify Intro.sort (U.filter (\(u, v, _) -> u /= v) (U.zip3 (grArcSources g) tgt wt))
+    keep i (u, v, _) = i == 0 || let (u', v', _) = U.unsafeIndex sorted (i - 1) in (u', v') /= (u, v)
+
+-- | 無向グラフの DFS の結果 ('dfsLowlink')。
+data Lowlink = Lowlink
+  { -- | 訪問順 (0 から)。
+    llOrder :: !(U.Vector Int)
+  , -- | low: 子孫から後退辺 1 本で戻れる最小の訪問順。
+    llLow :: !(U.Vector Int)
+  , -- | DFS 木の親。根は @-1@。
+    llParent :: !(U.Vector Int)
+  , -- | 二重頂点連結成分の頂点 (作った順。成分の中は、切れ目の頂点の後に積んだ順)。
+    llBlocks :: !(V.Vector (U.Vector Int))
+  , -- | 頂点ごとに、それを含む 'llBlocks' の成分の 1 つ。根でなければ、親から入る木の辺の成分。
+    llHome :: !(U.Vector Int)
+  }
+
+-- | 無向グラフを DFS して、訪問順・low・親を求める。'bridgeEdges' / 'articulationPoints' /
+-- 'bridgeComponentIds' などの元になる。独自の条件で橋を調べたいときは、これと 'isBridgeArc' を使う。
+-- 無向グラフ用。O(n + m)。
+{-# INLINE dfsLowlink #-}
+dfsLowlink :: (GraphKind g) => g -> GraphRet g Lowlink
+dfsLowlink g = primGraph g dfsLowlinkC
+
+dfsLowlinkC :: AtcGraph -> Lowlink
+dfsLowlinkC = grLowlink . grRequireUndirected "dfsLowlink"
+
+-- | 辺 @u - v@ が橋か。O(1)。
+--
+-- DFS 木で深い方 d と浅い方 a について、木の辺 a - d で、d の下から a 以上へ戻れないとき
+-- (このとき a - d の辺は 1 本だけ)。
+isBridgeArc :: Lowlink -> Int -> Int -> Bool
+isBridgeArc (Lowlink ordv low par _ _) u v = u /= v && par U.! d == a && low U.! d > ordv U.! a
+  where
+    (d, a) = if ordv U.! u > ordv U.! v then (u, v) else (v, u)
+
+-- 以下は内部用。
+
+-- 各辺の出発点。
+grArcSources :: AtcGraph -> U.Vector Int
+grArcSources (AtcGraph n off _ _ _) = U.create $ do
+  out <- UM.unsafeNew (U.last off)
+  rep n $ \u -> do
+    let s = U.unsafeIndex off u
+    UM.set (UM.unsafeSlice s (U.unsafeIndex off (u + 1) - s) out) u
+  pure out
+
+-- 無向グラフでなければ止める。第 1 引数はエラーに出す名前。
+grRequireUndirected :: String -> AtcGraph -> AtcGraph
+grRequireUndirected name g
+  | graphDirection g == Undirected = g
+  | otherwise = error ("Atc.Graph." ++ name ++ ": 無向グラフ用です (undirectedGraph などで作る)")
+
+-- 成分番号の形を確かめる。
+grCheckIds :: String -> (Int, U.Vector Int) -> AtcGraph -> AtcGraph
+grCheckIds name (k, cid) g
+  | U.length cid /= numVertices g = error ("Atc.Graph." ++ name ++ ": 成分番号の長さが頂点数と違います")
+  | U.any (\c -> c < 0 || k <= c) cid = error ("Atc.Graph." ++ name ++ ": 成分番号が 0 以上・成分の数未満ではありません")
+  | otherwise = g
+
+-- 頂点ごとの代表から、代表を初めて見た順に 0, 1 .. と番号を振る。代表は 0 以上 n 未満。
+grNumberRoots :: U.Vector Int -> (Int, U.Vector Int)
+grNumberRoots rs = runST $ do
+  idOf <- UM.replicate n (-1)
+  out <- UM.unsafeNew n
+  let step !k v = do
+        let r = U.unsafeIndex rs v
+        x <- UM.unsafeRead idOf r
+        if x /= -1
+          then UM.unsafeWrite out v x >> pure k
+          else UM.unsafeWrite idOf r k >> UM.unsafeWrite out v k >> pure (k + 1)
+  k <- foldM step 0 [0 .. n - 1]
+  (,) k <$> U.unsafeFreeze out
+  where
+    n = U.length rs
+
+-- 二重頂点連結成分の、成分ごとの頂点 (昇順。成分は辞書順) と、辺ごとの成分。
+--
+-- 2 つの成分が共有する頂点は高々 1 つなので、昇順に並べた頂点の先頭 2 つ (1 頂点の成分は
+-- 先頭と -1) で辞書順が決まる。1 頂点の成分の頂点は、ほかのどの成分にも入らない。
+grBiconnected :: AtcGraph -> (V.Vector (U.Vector Int), U.Vector Int)
+grBiconnected g@(AtcGraph _ _ tgt _ _) = (verts, arcComp)
+  where
+    Lowlink {llOrder = ordv, llBlocks = blocks, llHome = home} = grLowlink g
+    k = V.length blocks
+    sorted = V.map (U.modify Intro.sort) blocks
+    key b = let vs = V.unsafeIndex sorted b in (U.unsafeIndex vs 0, if U.length vs > 1 then U.unsafeIndex vs 1 else -1, b)
+    -- 新しい順に並べた、作った順の番号
+    perm = U.map (\(_, _, b) -> b) (U.modify Intro.sort (U.generate k key))
+    newId = U.update (U.replicate k 0) (U.imap (flip (,)) perm)
+    verts = V.map (V.unsafeIndex sorted) (V.convert perm)
+    -- 辺 u - w は、DFS 木で深い方の頂点の home の成分に入る
+    -- (木の辺も後退辺も、深い方へ入る木の辺と同じ成分)。
+    arcComp =
+      U.zipWith
+        (\u w -> newId U.! (home U.! (if ordv U.! w > ordv U.! u then w else u)))
+        (grArcSources g)
+        tgt
 
 -- 成分ごとの頂点 (昇順) と、辺ごとの成分 (-1 なら落とす) から部分グラフを作る。
--- 成分を 1 つずつ、元の番号 → 部分の番号を同じ配列に書き直しながら処理する。
-buildParts :: AtcGraph -> V.Vector (U.Vector Int) -> U.Vector Int -> V.Vector (AtcGraph, U.Vector Int)
-buildParts g@(AtcGraph n _ tgt wt _) verts arcComp = runST $ do
+--
+-- 全ての成分の CSR を 1 本ずつの大きな配列に書き、成分ごとに切り出す。成分の中の辺は
+-- 元の順 (出発点の昇順) に並べるので、そのまま CSR になる。元の番号 → 部分の番号は、
+-- 成分を 1 つずつ処理しながら同じ配列に書き直す (二重頂点連結成分では頂点が複数の成分に入る)。
+grBuildParts :: AtcGraph -> V.Vector (U.Vector Int) -> U.Vector Int -> V.Vector (AtcGraph, U.Vector Int)
+grBuildParts g@(AtcGraph n _ tgt wt _) verts arcComp = runST $ do
   -- 辺を成分ごとに (成分の中は元の順で) 並べる。
   pos <- U.thaw aoff
-  order <- UM.unsafeNew (U.last aoff)
+  order <- UM.unsafeNew total
   U.iforM_ arcComp $ \i c -> when (c >= 0) $ do
     p <- UM.unsafeRead pos c
     UM.unsafeWrite pos c (p + 1)
     UM.unsafeWrite order p i
   ordered <- U.unsafeFreeze order
   local <- UM.unsafeNew n
-  V.generateM k $ \c -> do
-    let vs = verts V.! c
-    U.imapM_ (\i v -> UM.unsafeWrite local v i) vs
-    es <- U.generateM (cnt U.! c) $ \j -> do
-      let a = ordered U.! (aoff U.! c + j)
-      lu <- UM.unsafeRead local (src U.! a)
-      lw <- UM.unsafeRead local (tgt U.! a)
-      pure (lu, lw, wt U.! a)
-    pure (buildCSR (graphDirection g) (U.length vs) es, vs)
+  offM <- UM.replicate (U.last voff) 0 -- 成分 c の off は [voff c, voff (c + 1))
+  tgtM <- UM.unsafeNew total
+  wtM <- UM.unsafeNew total
+  rep k $ \c -> do
+    let vs = V.unsafeIndex verts c
+        base = U.unsafeIndex voff c
+        s0 = U.unsafeIndex aoff c
+    rep (U.length vs) $ \i -> UM.unsafeWrite local (U.unsafeIndex vs i) i
+    rep (U.unsafeIndex cnt c) $ \j0 -> do
+      let j = s0 + j0
+          a = U.unsafeIndex ordered j
+      lu <- UM.unsafeRead local (U.unsafeIndex src a)
+      lw <- UM.unsafeRead local (U.unsafeIndex tgt a)
+      UM.unsafeModify offM (+ 1) (base + lu + 1)
+      UM.unsafeWrite tgtM j lw
+      UM.unsafeWrite wtM j (U.unsafeIndex wt a)
+    -- 次数の累積和にする。
+    rep (U.length vs) $ \i0 -> do
+      let i = base + i0 + 1
+      x <- UM.unsafeRead offM (i - 1)
+      UM.unsafeModify offM (+ x) i
+  offs <- U.unsafeFreeze offM
+  tgts <- U.unsafeFreeze tgtM
+  wts <- U.unsafeFreeze wtM
+  pure $ V.generate k $ \c ->
+    let vs = V.unsafeIndex verts c
+        s = U.unsafeIndex aoff c
+        e = U.unsafeIndex cnt c
+     in ( AtcGraph
+            (U.length vs)
+            (U.slice (U.unsafeIndex voff c) (U.length vs + 1) offs)
+            (U.slice s e tgts)
+            (U.slice s e wts)
+            (graphDirection g)
+        , vs
+        )
   where
     k = V.length verts
-    src = arcSources g
+    src = grArcSources g
     cnt = U.accumulate (+) (U.replicate k 0) (U.map (\c -> (c, 1)) (U.filter (>= 0) arcComp))
     aoff = U.scanl' (+) 0 cnt
+    total = U.last aoff
+    -- 成分 c の off は長さ (頂点数 + 1)。
+    voff = U.scanl' (+) 0 (U.convert (V.map (\vs -> U.length vs + 1) verts))
 
--- 無向グラフの DFS の結果。
-data Lowlink
-  = Lowlink
-      !(U.Vector Int) -- 訪問順
-      !(U.Vector Int) -- low (後退辺 1 本で戻れる最小の訪問順)
-      !(U.Vector Int) -- DFS 木の親 (根は -1)
-      [U.Vector Int] -- 二重頂点連結成分の頂点 (作った順)
-      !(U.Vector Int) -- 頂点ごとに、それを含む成分の 1 つ。根でなければ、親から入る木の辺の成分
-
+-- 'dfsLowlink' の本体 (向きは確かめない)。
+--
+-- 再帰の代わりに、呼び出しのスタック cs と頂点ごとの次に見る辺 it を持つ。
 -- 親へ戻る辺は 1 本だけ飛ばす (残りの多重辺は後退辺として数える)。
--- 二重頂点連結成分は、頂点を積んでおいて、子の low が自分の訪問順以上になったら下ろす。
-{-# INLINE lowlink #-}
-lowlink :: (GraphKind g) => g -> GraphRet g Lowlink
-lowlink g = primGraph g lowlinkC
-
-lowlinkC :: AtcGraph -> Lowlink
-lowlinkC g = runST $ do
+-- 二重頂点連結成分は、頂点を積んでおいて、子 v の low が親 p の訪問順以上になったら
+-- v から上を下ろし、p と合わせて 1 つの成分にする。成分は 1 本の配列 blk に続けて書く
+-- (どの頂点も下ろされるのは 1 回なので、長さは 2n で足りる)。
+grLowlink :: AtcGraph -> Lowlink
+grLowlink (AtcGraph n off tgt _ _) = runST $ do
   ordM <- UM.replicate n (-1)
-  lowM <- UM.replicate n 0
+  lowM <- UM.unsafeNew n
   parM <- UM.replicate n (-1)
   homeM <- UM.replicate n (-1)
-  stk <- UM.unsafeNew n
-  spR <- newSTRef (0 :: Int)
-  timeR <- newSTRef (0 :: Int)
-  blocksR <- newSTRef []
+  itM <- UM.unsafeNew n
+  skipM <- UM.unsafeNew n -- 親へ戻る辺を 1 本飛ばしたか
+  stk <- UM.unsafeNew n -- 成分が決まっていない頂点
+  atM <- UM.unsafeNew n -- 頂点を積んだ位置
+  cs <- UM.unsafeNew n
+  blk <- UM.unsafeNew (2 * n)
+  bof <- UM.unsafeNew (n + 1) -- 成分 b は blk の [bof b, bof (b + 1))
+  UM.write bof 0 0
   nbR <- newSTRef (0 :: Int)
-  let newBlock vs = do
+  let -- p と、stk の [from, sp) を 1 つの成分にする。
+      newBlock p from sp = do
         b <- readSTRef nbR
+        s <- UM.unsafeRead bof b
+        UM.unsafeWrite blk s p
+        let len = sp - from
+        UM.unsafeCopy (UM.unsafeSlice (s + 1) len blk) (UM.unsafeSlice from len stk)
+        rep len $ \i -> UM.unsafeRead stk (from + i) >>= \x -> UM.unsafeWrite homeM x b
+        UM.unsafeWrite bof (b + 1) (s + 1 + len)
         writeSTRef nbR (b + 1)
-        modifySTRef' blocksR (vs :)
         pure b
-      -- w まで下ろす。
-      popUntil w acc = do
-        sp <- readSTRef spR
-        x <- UM.unsafeRead stk (sp - 1)
-        writeSTRef spR (sp - 1)
-        if x == w then pure (x : acc) else popUntil w (x : acc)
-      dfs v p = do
-        t <- readSTRef timeR
-        writeSTRef timeR (t + 1)
+      enter !t !sp !csp v p = do
         UM.unsafeWrite ordM v t
         UM.unsafeWrite lowM v t
-        sp <- readSTRef spR
+        UM.unsafeWrite parM v p
+        UM.unsafeWrite itM v (U.unsafeIndex off v)
+        UM.unsafeWrite skipM v False
         UM.unsafeWrite stk sp v
-        writeSTRef spR (sp + 1)
-        let step skipped w
-              | w == v = pure skipped
-              | w == p && not skipped = pure True
-              | otherwise = do
-                  o <- UM.unsafeRead ordM w
-                  if o /= -1
-                    then UM.unsafeModify lowM (min o) v
-                    else do
-                      UM.unsafeWrite parM w v
-                      dfs w v
-                      lw <- UM.unsafeRead lowM w
-                      UM.unsafeModify lowM (min lw) v
-                      when (lw >= t) $ do
-                        xs <- popUntil w []
-                        b <- newBlock (U.fromList (v : xs))
-                        mapM_ (\x -> UM.unsafeWrite homeM x b) xs
-                        when (p == -1) $ do
-                          h <- UM.unsafeRead homeM v
-                          when (h == -1) $ UM.unsafeWrite homeM v b
-                  pure skipped
-        _ <- U.foldM' step False (targetsOf g v)
-        pure ()
-  rep n $ \r -> do
-    o <- UM.unsafeRead ordM r
-    when (o == -1) $ do
-      dfs r (-1)
-      _ <- popUntil r []
-      h <- UM.unsafeRead homeM r
-      when (h == -1) $ newBlock (U.singleton r) >>= UM.unsafeWrite homeM r
+        UM.unsafeWrite atM v sp
+        UM.unsafeWrite cs csp v
+        go (t + 1) (sp + 1) (csp + 1)
+      go !t !sp !csp
+        | csp == 0 = pure t
+        | otherwise = do
+            v <- UM.unsafeRead cs (csp - 1)
+            i <- UM.unsafeRead itM v
+            p <- UM.unsafeRead parM v
+            if i < U.unsafeIndex off (v + 1)
+              then do
+                UM.unsafeWrite itM v (i + 1)
+                let w = U.unsafeIndex tgt i
+                skipped <- UM.unsafeRead skipM v
+                if w == v
+                  then go t sp csp
+                  else
+                    if w == p && not skipped
+                      then UM.unsafeWrite skipM v True >> go t sp csp
+                      else do
+                        o <- UM.unsafeRead ordM w
+                        if o /= -1
+                          then UM.unsafeModify lowM (min o) v >> go t sp csp
+                          else enter t sp csp w v
+              else
+                if p == -1
+                  then go t sp (csp - 1)
+                  else do
+                    -- v から戻る。親 p の low を直し、p で切れるなら成分を下ろす。
+                    lv <- UM.unsafeRead lowM v
+                    UM.unsafeModify lowM (min lv) p
+                    op <- UM.unsafeRead ordM p
+                    if lv >= op
+                      then do
+                        from <- UM.unsafeRead atM v
+                        b <- newBlock p from sp
+                        pp <- UM.unsafeRead parM p
+                        when (pp == -1) $ do
+                          h <- UM.unsafeRead homeM p
+                          when (h == -1) $ UM.unsafeWrite homeM p b
+                        go t from (csp - 1)
+                      else go t sp (csp - 1)
+      outer !t r = do
+        o <- UM.unsafeRead ordM r
+        if o /= -1
+          then pure t
+          else do
+            -- 終わると根 r だけが積まれて残る (次の根は 0 から積む)。
+            t' <- enter t 0 0 r (-1)
+            h <- UM.unsafeRead homeM r
+            when (h == -1) $ do
+              b <- newBlock r 0 0
+              UM.unsafeWrite homeM r b
+            pure t'
+  _ <- foldM outer 0 [0 .. n - 1]
+  nb <- readSTRef nbR
+  bofs <- U.unsafeFreeze bof
+  blks <- U.unsafeFreeze blk
   Lowlink
     <$> U.unsafeFreeze ordM
     <*> U.unsafeFreeze lowM
     <*> U.unsafeFreeze parM
-    <*> (reverse <$> readSTRef blocksR)
+    <*> pure (V.generate nb (\b -> U.slice (bofs U.! b) (bofs U.! (b + 1) - bofs U.! b) blks))
     <*> U.unsafeFreeze homeM
-  where
-    n = numVertices g
-
--- 辺 u - v が橋か。DFS 木で深い方 d と浅い方 a について、木の辺 a - d で、
--- d の下から a 以上へ戻れないとき (このとき a - d の辺は 1 本だけ)。
-isBridgeArc :: Lowlink -> Int -> Int -> Bool
-isBridgeArc (Lowlink ordv low par _ _) u v = u /= v && par U.! d == a && low U.! d > ordv U.! a
-  where
-    (d, a) = if ordv U.! u > ordv U.! v then (u, v) else (v, u)
 
 -- ---------------------------------------------------------------------
 -- 木
