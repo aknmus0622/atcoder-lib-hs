@@ -1,4 +1,4 @@
-module Atc (module Atc.BFS, module Atc.BinarySearch, module Atc.DFS, module Atc.Debug, module Atc.DP, module Atc.Fenwick, module Atc.Graph, module Atc.Graph.Cycle, module Atc.Graph.Functional, module Atc.Grid, module Atc.IO, module Atc.JumpTable, module Atc.Math, module Atc.Memo, module Atc.ModInt, module Atc.MonoStack, module Atc.SegTree, module Atc.TwoPointers, module Atc.UnionFind) where
+module Atc (module Atc.BFS, module Atc.BinarySearch, module Atc.DFS, module Atc.Debug, module Atc.DP, module Atc.Fenwick, module Atc.Graph, module Atc.Graph.Cycle, module Atc.Graph.Functional, module Atc.Grid, module Atc.IO, module Atc.JumpTable, module Atc.Math, module Atc.Memo, module Atc.ModInt, module Atc.MonoStack, module Atc.SegTree, module Atc.Sequence, module Atc.TwoPointers, module Atc.UnionFind) where
 
 import Atc.BFS
 import Atc.BinarySearch
@@ -17,5 +17,6 @@ import Atc.Memo
 import Atc.ModInt
 import Atc.MonoStack
 import Atc.SegTree
+import Atc.Sequence
 import Atc.TwoPointers
 import Atc.UnionFind

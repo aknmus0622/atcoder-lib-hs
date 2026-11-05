@@ -23,6 +23,7 @@ library
                       , Atc.ModInt
                       , Atc.MonoStack
                       , Atc.SegTree
+                      , Atc.Sequence
                       , Atc.TwoPointers
                       , Atc.UnionFind
     build-depends:      base >=4.17 && <5
