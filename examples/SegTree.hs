@@ -60,6 +60,43 @@ rangeAddMax = do
       [_, l, r] -> foldSG l r t >>= print
       _ -> error "query"
 
+-- | 1 点更新・区間平均。@0 i x@ で a_i を x にし、@1 l r@ で [l, r) の平均を出力する。
+-- 平均どうしは合わせられないが、(和, 個数) にすれば成分ごとの和で合わせられる。
+-- 平均は最後に 和 / 個数 で出す。
+rangeAverage :: IO ()
+rangeAverage = do
+  [_, q] <- ints
+  as <- U.fromList <$> ints
+  let op (s1, c1) (s2, c2) = (s1 + s2, c1 + c2)
+  t <- buildSG op (0, 0) (U.map (\a -> (a, 1 :: Int)) as)
+  forM_ [1 .. q] $ \_ -> do
+    qu <- ints
+    case qu of
+      [0, i, x] -> modifySG i (const (x, 1)) t
+      [_, l, r] -> do
+        (s, c) <- foldSG l r t
+        print (fromIntegral s / fromIntegral c :: Double)
+      _ -> error "query"
+
+-- | 'rangeAddSum' を、用意してある作用を使わずに書いたもの。値は (和, 長さ)、作用は足す数。
+--
+-- * 値の演算: 成分ごとの和。単位元は (0, 0)。
+-- * @act x (s, len) = (s + x len, len)@: 子を見ずに節点の和を直せる (長さを持つ理由)。
+-- * 合成: +x の後に +y は +(x + y)。何もしない作用は 0。
+rangeAddSumRaw :: IO ()
+rangeAddSumRaw = do
+  [_, q] <- ints
+  as <- U.fromList <$> ints
+  let op (s1, l1) (s2, l2) = (s1 + s2, l1 + l2)
+      act x (s, len) = (s + x * len, len)
+  t <- buildLazySG op (0, 0) act (+) 0 (U.map (\a -> (a, 1 :: Int)) as)
+  forM_ [1 .. q] $ \_ -> do
+    qu <- ints
+    case qu of
+      [0, l, r, x] -> applySG l r x t
+      [_, l, r] -> foldSG l r t >>= print . fst
+      _ -> error "query"
+
 -- | 区間加算・区間和。@0 l r x@ で [l, r) に x を足し、@1 l r@ で [l, r) の和を出力する。
 -- 和に足すには長さが要るので、値を (和, 長さ) にする ('withLenSG')。
 rangeAddSum :: IO ()

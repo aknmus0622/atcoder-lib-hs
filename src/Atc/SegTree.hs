@@ -105,6 +105,64 @@
 --
 -- > instance (a ~ Int) => ActSG (AffineSG a) P where ...   -- AffineSG 2 1 で推論できる
 --
+-- == 仕組み
+--
+-- 列を半分ずつに分けた区間 (節点) ごとに、その区間の集約を持っておく。
+-- 葉の数を 2 冪 @sizeSG@ にそろえ、節点を 1 本の配列 'nodesSG' に置く。
+-- 根が 1、節点 @k@ の子が @2k@ と @2k+1@、i 番目の要素が葉 @sizeSG + i@。
+-- 余った葉は単位元で埋める。
+--
+-- > n = 8 (sizeSG = 8) のとき             節点の値 = 左の子 `op` 右の子 (updateSG)
+-- >
+-- >                     1 [0,8)
+-- >           2 [0,4)             3 [4,8)
+-- >      4 [0,2)   5 [2,4)   6 [4,6)   7 [6,8)
+-- >      8   9    10  11    12  13    14  15      <- 葉 = a_0 .. a_7
+--
+-- * 取得 ('foldSG'): どの区間も、各段から左右 1 個ずつまでの節点に分けられる
+--   (例: [1,6) = 節点 9 [1,2) ・ 節点 5 [2,4) ・ 節点 6 [4,6))。それらを左から順に
+--   @op@ で合わせる。O(log n)。
+-- * 1 点更新 ('modifySG'): 葉を書き換え、根までの祖先 (@k/2, k/4, ..., 1@) を作り直す。O(log n)。
+--
+-- このため値の演算に要るのは次の 2 つで、交換則は要らない (左右の順は保つ)。
+--
+-- * 結合則: 区間の分け方によらず同じ答えになる。
+-- * 単位元: 空の区間の答えと、余った葉に使う。
+--
+-- そのままでは合わせられない値は、情報を足すと合わせられることがある。
+-- 例えば平均は (和, 個数) にすれば合わせられる (例は examples/SegTree.hs の @rangeAverage@)。
+--
+-- === 遅延版
+--
+-- 区間に作用をかけるとき、葉まで降りると O(n) かかる。そこで、区間を節点に分けたら
+-- その節点の値だけ @act f@ で直し、子にかける分は作用の配列 'lazySG' に溜めておく。
+-- 子を見る必要が出たときに初めて子に流す。
+--
+-- > 理論                               ライブラリ
+-- > 節点の値に作用をかけて溜める       allApplySG k f   値 = act f 値、溜め = comp f 溜め
+-- > 溜めた作用を子に流す               pushSG k         子 2 つに allApplySG、溜め = idf
+-- > 読み書きの前に通り道の作用を流す   pushBoundsSG     区間の両端の祖先だけ、上から
+--
+-- 上の「作用」の節の条件は、それぞれ次のために要る。
+--
+-- * @act f (op x y) = op (act f x) (act f y)@: 子を見ずに節点の値を直せる。
+--   和に足すなら長さが要るので、値を (和, 長さ) にする ('withLenSG')。
+-- * @act (comp f g) x = act f (act g x)@: 溜めた作用が 1 つにまとまり、大きさが増えない。
+-- * @act idf x = x@: 溜めた作用がないことを表す。
+--
+-- 'applySG' は、作用を流す ('pushBoundsSG') → 区間を節点に分けて 'allApplySG' →
+-- 両端の祖先を作り直す ('updateSG') の順に動く。先に流すのは、祖先に溜めた作用を
+-- 作り直しで消さないため。
+--
+-- 'buildSG' は作用を @()@ にした遅延版で、@isLazySG = False@ により溜める配列を持たず、
+-- 流す処理も飛ばす。
+--
+-- === 二分探索
+--
+-- 'maxRightSG' は @l@ から右へ節点単位で集約を伸ばし、次の節点を足すと @p@ が偽になる
+-- ところで、その節点の中へ降りる (左の子を足しても真なら右の子へ、偽なら左の子へ)。
+-- 外から 'foldSG' を二分探索すると O(log² n) だが、これは O(log n)。'minLeftSG' は左向き。
+--
 -- == 置き場所
 --
 -- 用意してある値と作用は 'U.Vector' に置ける。自分で作った型は 'V.Vector' に置くか、
@@ -188,6 +246,9 @@ foldSG l r t
       let l0 = l + sizeSG t
           r0 = r + sizeSG t
       pushBoundsSG l0 r0 t
+      -- 葉の段から 1 段ずつ上がる。i が奇数 (右の子) ならその親は区間からはみ出すので、
+      -- 節点 i を取って右へずらす。j の側も同じ。左で取ったものは sml の右に、
+      -- 右で取ったものは smr の左に付けて、左右の順を保つ。
       let go !i !j !sml !smr
             | i >= j = pure (op sml smr)
             | otherwise = do
@@ -208,6 +269,7 @@ modifySG i g t
   | otherwise = do
       let k = i + sizeSG t
           d = nodesSG t
+      -- 葉までの祖先に溜めた作用を上から流し、葉を書き換え、祖先を下から作り直す。
       when (isLazySG t) $ forM_ [logSG t, logSG t - 1 .. 1] $ \s -> pushSG (k `shiftR` s) t
       x <- GM.unsafeRead d k
       GM.unsafeWrite d k $! g x
@@ -222,12 +284,15 @@ applySG l r f t
   | otherwise = do
       let l0 = l + sizeSG t
           r0 = r + sizeSG t
+      -- 先に両端の祖先の作用を流す (後で作り直すときに消さないため)。
       pushBoundsSG l0 r0 t
+      -- foldSG と同じ分け方で節点を取り、読む代わりに作用をかけて溜める。
       let go !i !j = when (i < j) $ do
             when (odd i) $ allApplySG i f t
             when (odd j) $ allApplySG (j - 1) f t
             go ((i + 1) `shiftR` 1) (j `shiftR` 1)
       go l0 r0
+      -- 値が変わった節点の祖先 (両端の祖先) を下から作り直す。
       forM_ [1 .. logSG t] $ \s -> do
         when (((l0 `shiftR` s) `shiftL` s) /= l0) $ updateSG (l0 `shiftR` s) t
         when (((r0 `shiftR` s) `shiftL` s) /= r0) $ updateSG ((r0 - 1) `shiftR` s) t
@@ -493,6 +558,8 @@ updateSG k t = do
     d = nodesSG t
 
 -- 節点 k に f をかけ、内部の節点なら f を溜める。
+-- 値は子を見ずに act f で直す (準同型の条件)。溜めた作用 g とは comp f g にまとめる
+-- (g の後に f。合成の条件)。葉は子がないので溜めない。
 {-# INLINE allApplySG #-}
 allApplySG :: (PrimMonad m, G.Vector v a, G.Vector v f) => Int -> f -> SegTree m v a f -> m ()
 allApplySG k f t = do
@@ -502,7 +569,8 @@ allApplySG k f t = do
     g <- GM.unsafeRead (lazySG t) k
     GM.unsafeWrite (lazySG t) k $! composeSG t f g
 
--- 節点 k に溜めた作用を子に流す。
+-- 節点 k に溜めた作用を子に流し、溜めを何もしない作用 idf に戻す。
+-- 節点 k の値は作用をかけた後のものなので、そのまま。
 {-# INLINE pushSG #-}
 pushSG :: (PrimMonad m, G.Vector v a, G.Vector v f) => Int -> SegTree m v a f -> m ()
 pushSG k t = do
@@ -512,6 +580,9 @@ pushSG k t = do
   GM.unsafeWrite (lazySG t) k $! idActSG t
 
 -- 葉 l0 と r0 (r0 は含まない) の祖先に溜めた作用を、上から流す。遅延版でなければ何もしない。
+-- [l0, r0) を分けた節点の祖先は、両端の祖先のどれか。端がその段の区切りにちょうど
+-- 合う祖先 ((l0 >> s) << s == l0) はその端で区間に切られないので、流さなくてよい
+-- (もう一方の端で切られるなら、そちらの判定で流す)。
 {-# INLINE pushBoundsSG #-}
 pushBoundsSG :: (PrimMonad m, G.Vector v a, G.Vector v f) => Int -> Int -> SegTree m v a f -> m ()
 pushBoundsSG l0 r0 t =
