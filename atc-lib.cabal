@@ -12,6 +12,7 @@ library
                       , Atc.Debug
                       , Atc.DP
                       , Atc.Fenwick
+                      , Atc.Graph.Tree
                       , Atc.IO
                       , Atc.Graph
                       , Atc.Graph.Cycle
