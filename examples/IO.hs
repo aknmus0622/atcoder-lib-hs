@@ -5,7 +5,6 @@ module IO where
 
 import Atc
 import qualified Data.ByteString.Char8 as C
-import qualified Data.Vector.Unboxed as U
 
 -- | 'readBS' は読む先の型で決まる。
 --
@@ -21,18 +20,18 @@ parse = do
 
 -- | @H W@ を読んでから整数のグリッドを読む。
 --
--- 'getIntGrid' は @幅 高さ@ の順に取る。入力の @H W@ とは逆なので注意。
+-- 'getIntGridU' は @幅 高さ@ の順に取る。入力の @H W@ とは逆なので注意。
 readIntGrid :: IO ()
 readIntGrid = do
   [h, w] <- map readBS . C.words <$> C.getLine
-  g <- getIntGrid w h :: IO (Grid U.Vector Int)
+  g <- getIntGridU w h
   putIntGrid (mapGrid (* 2) g)
 
 -- | @#.#@ のような区切りなしのマス目を読んで、そのまま書き戻す。
 readCharGrid :: IO ()
 readCharGrid = do
   [h, w] <- map readBS . C.words <$> C.getLine
-  g <- getCharGrid w h :: IO (Grid U.Vector Char)
+  g <- getCharGridU w h
   putCharGrid (mapGrid (\c -> if c == '#' then '.' else '#') g)
 
 -- | 読んだグリッドを数えあげる。
@@ -41,7 +40,7 @@ readCharGrid = do
 countWalls :: IO ()
 countWalls = do
   [h, w] <- map readBS . C.words <$> C.getLine
-  g <- getCharGrid w h :: IO (Grid U.Vector Char)
+  g <- getCharGridU w h
   print (foldGrid' (\acc c -> if c == '#' then acc + 1 else acc) (0 :: Int) g)
 
 -- | 出力は 'putIntGrid' に任せる。
@@ -51,7 +50,7 @@ countWalls = do
 writeGrid :: IO ()
 writeGrid = do
   [h, w] <- map readBS . C.words <$> C.getLine
-  putIntGrid (unflattenRow w h [1 .. w * h] :: Grid U.Vector Int)
+  putIntGrid (unflattenRowU w h [1 .. w * h])
 
 -- | 'Parsable' を自分の関数の制約にする。
 --

@@ -58,7 +58,7 @@ knapsack = do
 countPaths :: IO ()
 countPaths = do
   [h, w] <- ints
-  g <- getCharGrid w h :: IO (Grid U.Vector Char)
+  g <- getCharGridU w h
   let m = 1000000007 :: Int
       add a b = (a + b) `mod` m
       dp = pushDP ((0, 0), (h - 1, w - 1)) add [((0, 0), 1)] $ \(r, c) x ->

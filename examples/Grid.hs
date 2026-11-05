@@ -8,7 +8,6 @@ import Atc
 import Control.Monad (filterM, forM_)
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
-import qualified Data.Vector.Unboxed.Mutable as UM
 import Input (ints)
 
 -- | 座標と 1 次元添字を行き来する。
@@ -25,11 +24,12 @@ coordinates = do
 
 -- | 行のリストから作って、形を聞く。
 --
--- 'fromRows' は行の長さが揃っていなければ error。中身の Vector は
--- 型注釈で選ぶ ('U.Vector' は要素に @Unbox@ が要る、'V.Vector' は何でも入る)。
+-- 'fromRows' は行の長さが揃っていなければ error。中身の Vector は名前の末尾で選ぶ
+-- (@fromRowsU@ は 'U.Vector' で要素に @Unbox@ が要る、@fromRowsV@ は 'V.Vector' で何でも入る)。
+-- 末尾なしの 'fromRows' は型注釈か使い方で決める。
 build :: IO ()
 build = do
-  let g = fromRows [[1, 2, 3], [4, 5, 6]] :: Grid U.Vector Int
+  let g = fromRowsU [[1, 2, 3], [4, 5, 6 :: Int]]
   print (gridWidth g, gridHeight g)
   print (elemAt (1, 2) g) -- 6
   print (getElem (9, 9) g) -- Nothing (範囲外)
@@ -42,8 +42,8 @@ fromFlat :: IO ()
 fromFlat = do
   [h, w] <- ints
   xs <- ints
-  print (unflattenRow w h xs :: Grid U.Vector Int)
-  print (unflattenColumn w h xs :: Grid U.Vector Int)
+  print (unflattenRowU w h xs)
+  print (unflattenColumnU w h xs)
 
 -- | 範囲の見方: 'inGrid' と 'neighborPos4' / 'neighbors4'。
 --
@@ -52,7 +52,7 @@ fromFlat = do
 neighborhood :: IO ()
 neighborhood = do
   [h, w] <- ints
-  g <- getCharGrid w h :: IO (Grid U.Vector Char)
+  g <- getCharGridU w h
   print (inGrid (0, 0) g)
   print (neighborPos4 (0, 0) g) -- 範囲内の座標だけ
   print (neighbors4 (0, 0) g) -- 座標と値の組
@@ -63,7 +63,7 @@ neighborhood = do
 -- 書く strict 版で、数値を積むときはこちらを使う。
 write :: IO ()
 write = do
-  let g = fromRows [[1, 2], [3, 4]] :: Grid U.Vector Int
+  let g = fromRowsU [[1, 2], [3, 4 :: Int]]
   print (setElem (0, 0) 9 g)
   print (setElem' (0, 0) 9 g)
   print (adjustElem (1, 1) (* 10) g)
@@ -75,7 +75,7 @@ write = do
 transform :: IO ()
 transform = do
   [h, w] <- ints
-  g <- getCharGrid w h :: IO (Grid U.Vector Char)
+  g <- getCharGridU w h
   print (mapGrid (== '#') g) -- Grid U.Vector Bool
   print (mapGrid' (== '#') g)
   print (imapGrid (\(r, c) x -> if even (r + c) then x else '.') g)
@@ -88,7 +88,7 @@ transform = do
 -- 返すリストの長さは元と同じでなければならない。
 rowsAndColumns :: IO ()
 rowsAndColumns = do
-  let g = fromRows [[1, 2, 3], [4, 5, 6]] :: Grid U.Vector Int
+  let g = fromRowsU [[1, 2, 3], [4, 5, 6 :: Int]]
   print (mapRow reverse g)
   print (mapRow' (map (* 2)) g)
   print (imapRow (\r xs -> map (+ r) xs) g)
@@ -105,7 +105,7 @@ rowsAndColumns = do
 cumulativeSum :: IO ()
 cumulativeSum = do
   [h, w] <- ints
-  g <- getIntGrid w h :: IO (Grid U.Vector Int)
+  g <- getIntGridU w h
   let s = scanColumn' (+) 0 (scanRow' (+) 0 g)
   -- 長方形 [(r1, c1), (r2, c2)) の和
   let area (r1, c1) (r2, c2) =
@@ -138,7 +138,7 @@ manhattanRotation = do
 diamondSums :: IO ()
 diamondSums = do
   [h, w] <- ints
-  g <- getIntGrid w h :: IO (Grid U.Vector Int)
+  g <- getIntGridU w h
   let rot = chebyshevGrid 0 g
       n = gridWidth rot -- h + w - 1
       acc = scanColumn' (+) 0 (scanRow' (+) 0 rot)
@@ -158,7 +158,7 @@ diamondSums = do
 foldLines :: IO ()
 foldLines = do
   [h, w] <- ints
-  g <- getIntGrid w h :: IO (Grid U.Vector Int)
+  g <- getIntGridU w h
   print (foldRow' (+) 0 g :: [Int]) -- 各行の和
   print (foldRow (+) 0 g :: U.Vector Int)
   print (foldColumn' (+) 0 g :: [Int]) -- 各列の和
@@ -171,10 +171,10 @@ foldLines = do
 foldAll :: IO ()
 foldAll = do
   [h, w] <- ints
-  g <- getCharGrid w h :: IO (Grid U.Vector Char)
+  g <- getCharGridU w h
   print (foldGrid' (\acc c -> if c == '#' then acc + 1 else acc) (0 :: Int) g)
   print (foldGrid (flip (:)) [] g)
-  let v = fromRows [[1, 2], [3, 4]] :: Grid V.Vector Int
+  let v = fromRowsV [[1, 2], [3, 4 :: Int]]
   print (sum v, maximum v, length v)
 
 -- | 並べ直す: 'toRows' / 'flattenRow' / 'flattenColumn'。
@@ -183,7 +183,7 @@ foldAll = do
 reshape :: IO ()
 reshape = do
   [h, w] <- ints
-  g <- getCharGrid w h :: IO (Grid U.Vector Char)
+  g <- getCharGridU w h
   print (toRows g :: [String])
   print (toRows g :: V.Vector (U.Vector Char))
   print (flattenRow g :: [Char]) -- 行優先
@@ -209,21 +209,21 @@ bfsOnGrid g = createGrid $ do
   go [(0, 0)]
   pure dist
 
--- | 'IO' で直接使うなら型を書いて決める。
+-- | 'IO' で直接使うなら、型を決めた版 ('newMGridUM' / 'freezeGridU' など) を使う。
 --
 -- 可変版は読み書きが O(1)。同じ名前の関数が @m@ に包まれて返る。
 mutableInIO :: IO ()
 mutableInIO = do
   [h, w] <- ints
-  g <- newMGrid w h 0 :: IO (MGrid UM.MVector IO Int)
+  g <- newMGridUM w h (0 :: Int)
   adjustElem (1, 2) (+ 1) g
   setElem' (0, 0) 5 g
   elemAt (1, 2) g >>= print
   getElem (99, 99) g >>= print
   rows <- toRows g
   print (rows :: [[Int]])
-  frozen <- freezeGrid g
-  print (frozen :: Grid U.Vector Int)
+  frozen <- freezeGridU g
+  print frozen
 
 -- | 既にあるグリッドから可変版を作る: 'thawGrid'。
 --
@@ -231,21 +231,21 @@ mutableInIO = do
 thawAndFreeze :: IO ()
 thawAndFreeze = do
   [h, w] <- ints
-  g <- getIntGrid w h :: IO (Grid U.Vector Int)
+  g <- getIntGridU w h
   m <- thawGrid g
   forM_ [0 .. h - 1] $ \r -> adjustElem' (r, 0) (* 2) m
-  back <- freezeGrid m
-  putIntGrid (back :: Grid U.Vector Int)
+  back <- freezeGridU m
+  putIntGrid back
 
 -- | 可変版でも共通関数が使える (返り値が @m@ に包まれるだけ)。
 commonOnMutable :: IO ()
 commonOnMutable = do
   [h, w] <- ints
-  g <- newMGrid w h (1 :: Int) :: IO (MGrid UM.MVector IO Int)
+  g <- newMGridUM w h (1 :: Int)
   foldGrid' (+) 0 g >>= print
   (foldRow' (+) 0 g :: IO [Int]) >>= print
   mapped <- mapGrid' (* 3) g
-  freezeGrid mapped >>= \f -> print (f :: Grid U.Vector Int)
+  freezeGridU mapped >>= print
   t <- transposeGrid g
   print (gridWidth t, gridHeight t)
 

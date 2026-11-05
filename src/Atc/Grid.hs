@@ -59,8 +59,10 @@
 -- == 不変版 'Grid'
 --
 -- 中身は @U.Vector@ (Int / Char / Bool など) か @V.Vector@ (それ以外)。
+-- 作る関数には、型を決めた版 (末尾 @U@ / @V@。可変版は @UM@ / @MV@) がある:
+-- @fromRowsU@ / @unflattenRowU@ / @unflattenColumnU@ / @createGridU@ / @freezeGridU@ / @newMGridUM@ など。
 --
--- > let g = fromRows [[1, 2, 3], [4, 5, 6]] :: Grid U.Vector Int
+-- > let g = fromRowsU [[1, 2, 3], [4, 5, 6]]   -- Grid U.Vector Int
 -- > getElem (1, 1) g                 -- Just 5
 -- > toRows (setElem (1, 1) 99 g) :: [[Int]]   -- [[1,2,3],[4,99,6]]
 -- > neighbors4 (0, 1) g              -- [((1,1),5),((0,0),1),((0,2),3)]
@@ -113,7 +115,7 @@
 -- @sum@ / @maximum@ / @toList@ / @elem@ / @length@ などがそのまま使える。
 -- @U.Vector@ は 'Foldable' にできない (要素に @Unbox@ が要る) ので、'foldGrid' を使う。
 --
--- > let g = fromRows [[1, 2], [3, 4]] :: Grid V.Vector Int
+-- > let g = fromRowsV [[1, 2], [3, 4]]   -- Grid V.Vector Int
 -- > sum g                            -- 10
 --
 -- == 可変版 'MGrid'
@@ -138,11 +140,11 @@
 -- >   go [(0, 0)]
 -- >   pure dist
 --
--- IO で直接使うなら型を書いて決める。
+-- IO で直接使うなら、型を決めた版 (末尾 @UM@ / @MV@ / @U@ / @V@) を使うと型を書かなくてよい。
 --
--- > g <- newMGrid w h 0 :: IO (MGrid UM.MVector IO Int)
+-- > g <- newMGridUM w h (0 :: Int)  -- MGrid UM.MVector IO Int
 -- > adjustElem (1, 2) (+ 1) g
--- > frozen <- freezeGrid g          -- :: Grid U.Vector Int
+-- > frozen <- freezeGridU g         -- Grid U.Vector Int
 --
 -- 既にある 'Grid' から始めるなら 'thawGrid'。
 --
@@ -181,7 +183,7 @@
 -- 'fromOneBased' か 'fromZeroBased' で 'ZeroBased' に包む。ライブラリの中はすべて
 -- 0 始まりで、包まずに渡すと型エラーになる。
 --
--- > es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
+-- > es <- getIntGridU 2 m
 -- > let g = undirectedGraph (fromOneBased es)    -- 入力が 1 始まり (AtCoder の普通の形)
 -- > let g = undirectedGraph (fromZeroBased es)   -- 入力が 0 始まり
 --
@@ -215,6 +217,7 @@ import qualified Data.Vector.Generic.Mutable as GM
 import qualified Data.Vector.Mutable as MV
 import Data.Vector.Unboxed (MVector, Vector)
 import qualified Data.Vector.Unboxed as U
+import qualified Data.Vector.Unboxed.Mutable as UM
 
 -- ---------------------------------------------------------------------
 -- 座標計算
@@ -828,12 +831,26 @@ fromRows rows@(row : _)
   where
     w = length row
 
+-- | 'fromRows' の型を決めたもの。
+fromRowsU :: (U.Unbox a) => [[a]] -> Grid U.Vector a
+fromRowsU = fromRows
+
+fromRowsV :: [[a]] -> Grid V.Vector a
+fromRowsV = fromRows
+
 -- | 行優先 (上の行から、各行は左から) に並んだリストから、幅 @w@ 高さ @h@ で作る。
 -- 'flattenRow' の逆。長さが @w * h@ でなければ 'error'。
 unflattenRow :: (G.Vector v a) => Int -> Int -> [a] -> Grid v a
 unflattenRow w h xs
   | length xs == w * h = Grid w h (G.fromListN (w * h) xs)
   | otherwise = error "Atc.Grid.unflattenRow: 要素数が width * height と一致しません"
+
+-- | 'unflattenRow' の型を決めたもの。
+unflattenRowU :: (U.Unbox a) => Int -> Int -> [a] -> Grid U.Vector a
+unflattenRowU = unflattenRow
+
+unflattenRowV :: Int -> Int -> [a] -> Grid V.Vector a
+unflattenRowV = unflattenRow
 
 -- | 列優先 (左の列から、各列は上から) に並んだリストから、幅 @w@ 高さ @h@ で作る。
 -- 'flattenColumn' の逆。長さが @w * h@ でなければ 'error'。
@@ -844,9 +861,23 @@ unflattenColumn w h xs
   where
     cs = V.fromListN (w * h) xs
 
+-- | 'unflattenColumn' の型を決めたもの。
+unflattenColumnU :: (U.Unbox a) => Int -> Int -> [a] -> Grid U.Vector a
+unflattenColumnU = unflattenColumn
+
+unflattenColumnV :: Int -> Int -> [a] -> Grid V.Vector a
+unflattenColumnV = unflattenColumn
+
 -- | 幅 @w@ 高さ @h@ で、全マスを @x@ で埋めて作る。
 newMGrid :: (PrimMonad m, GM.MVector v a) => Int -> Int -> a -> m (MGrid v m a)
 newMGrid w h x = MGrid w h <$> GM.replicate (w * h) x
+
+-- | 'newMGrid' の型を決めたもの。
+newMGridUM :: (PrimMonad m, U.Unbox a) => Int -> Int -> a -> m (MGrid UM.MVector m a)
+newMGridUM = newMGrid
+
+newMGridMV :: (PrimMonad m) => Int -> Int -> a -> m (MGrid MV.MVector m a)
+newMGridMV = newMGrid
 
 -- | 不変版をコピーして可変版を作る。
 thawGrid :: (PrimMonad m, G.Vector v a) => Grid v a -> m (MGrid (G.Mutable v) m a)
@@ -856,11 +887,25 @@ thawGrid (Grid w h d) = MGrid w h <$> G.thaw d
 freezeGrid :: (PrimMonad m, G.Vector v a) => MGrid (G.Mutable v) m a -> m (Grid v a)
 freezeGrid (MGrid w h d) = Grid w h <$> G.freeze d
 
+-- | 'freezeGrid' の型を決めたもの。
+freezeGridU :: (PrimMonad m, U.Unbox a) => MGrid UM.MVector m a -> m (Grid U.Vector a)
+freezeGridU = freezeGrid
+
+freezeGridV :: (PrimMonad m) => MGrid MV.MVector m a -> m (Grid V.Vector a)
+freezeGridV = freezeGrid
+
 -- | ST の中で可変版を組み立てて、コピーせずに不変版として取り出す。
 createGrid :: (G.Vector v a) => (forall s. ST s (MGrid (G.Mutable v) (ST s) a)) -> Grid v a
 createGrid st = runST $ do
   MGrid w h d <- st
   Grid w h <$> G.unsafeFreeze d
+
+-- | 'createGrid' の型を決めたもの。
+createGridU :: (U.Unbox a) => (forall s. ST s (MGrid UM.MVector (ST s) a)) -> Grid U.Vector a
+createGridU st = createGrid st
+
+createGridV :: (forall s. ST s (MGrid MV.MVector (ST s) a)) -> Grid V.Vector a
+createGridV st = createGrid st
 
 -- ---------------------------------------------------------------------
 -- 入力の頂点番号

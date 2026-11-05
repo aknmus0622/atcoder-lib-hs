@@ -24,7 +24,7 @@ maze = do
   [h, w] <- ints
   [sy, sx] <- map (subtract 1) <$> ints
   [gy, gx] <- map (subtract 1) <$> ints
-  g <- getCharGrid w h :: IO (Grid U.Vector Char)
+  g <- getCharGridU w h
   let (_, dist) = runBFS (dense ((0, 0), (h - 1, w - 1))) $ do
         visitQ (sy, sx) (0 :: Int)
         whileQ $ \p d -> forM_ (around4 p) $ \q ->
@@ -37,7 +37,7 @@ maze = do
 graphDist :: IO ()
 graphDist = do
   [n, m] <- ints
-  es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
+  es <- getIntGridU 2 m
   let g = undirectedGraph (fromOneBased es)
       (_, dist) = runBFS (dense (0, n - 1)) $ do
         visitQ 0 (0 :: Int)
@@ -51,7 +51,7 @@ graphDist = do
 strongerTakahashi :: IO ()
 strongerTakahashi = do
   [h, w] <- ints
-  g <- getCharGrid w h :: IO (Grid U.Vector Char)
+  g <- getCharGridU w h
   let relax q x end = void $ updateQ q $ \old ->
         if maybe True (x <) old then Just (x, end) else Nothing
       (_, dist) = runBFS (dense ((0, 0), (h - 1, w - 1))) $ do
@@ -69,7 +69,7 @@ strongerTakahashi = do
 keysAndDoors :: IO ()
 keysAndDoors = do
   [h, w] <- ints
-  g <- getCharGrid w h :: IO (Grid U.Vector Char)
+  g <- getCharGridU w h
   let canEnter c m = c /= '#' && (c < 'A' || c > 'E' || testBit m (fromEnum c - fromEnum 'A'))
       (_, dist) = runBFS (dense (((0, 0), 0), ((h - 1, w - 1), 31))) $ do
         visitQ ((0, 0), 0) (0 :: Int)
@@ -86,7 +86,7 @@ keysAndDoors = do
 shortestPath :: IO ()
 shortestPath = do
   [n, m] <- ints
-  es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
+  es <- getIntGridU 2 m
   let g = undirectedGraph (fromOneBased es)
       (prev, dist) = runBFS (dense (0, n - 1)) $ do
         pv <- liftST (UM.replicate n (-1))
@@ -105,7 +105,7 @@ shortestPath = do
 countShortest :: IO ()
 countShortest = do
   [n, m] <- ints
-  es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
+  es <- getIntGridU 2 m
   let g = undirectedGraph (fromOneBased es)
       md = 10 ^ (9 :: Int) + 7
       (_, tbl) = runBFS (dense (0, n - 1)) $ do
@@ -123,7 +123,7 @@ countShortest = do
 components :: IO ()
 components = do
   [n, m] <- ints
-  es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
+  es <- getIntGridU 2 m
   let g = undirectedGraphFromList n [(u - 1, v - 1, 1) | [u, v] <- toRows es]
       (cnt, comp) = runBFS (dense (0, n - 1)) $ do
         let go v i = do
@@ -146,7 +146,7 @@ components = do
 bipartite :: IO ()
 bipartite = do
   [n, m] <- ints
-  es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
+  es <- getIntGridU 2 m
   let g = undirectedGraph (fromOneBased es)
       (ok, _) = runBFS (dense (0, n - 1)) $ do
         bad <- liftST (UM.replicate 1 False)
@@ -168,7 +168,7 @@ bipartite = do
 untilGoal :: IO ()
 untilGoal = do
   [h, w] <- ints
-  g <- getCharGrid w h :: IO (Grid U.Vector Char)
+  g <- getCharGridU w h
   let goal = (h - 1, w - 1)
       (ans, _) = runBFS (dense ((0, 0), goal)) $ do
         visitQ (0, 0) (0 :: Int)
@@ -206,7 +206,7 @@ multiplyAndRotate = do
 subtreeSizes :: IO ()
 subtreeSizes = do
   n <- head <$> ints
-  es <- getIntGrid 2 (n - 1) :: IO (Grid U.Vector Int)
+  es <- getIntGridU 2 (n - 1)
   let g = undirectedGraph (fromOneBased es)
       (order, parent) = runBFS (dense (0, n - 1)) $ do
         visitQ 0 (-1 :: Int)

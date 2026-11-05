@@ -10,11 +10,11 @@
 --
 -- == 作る
 --
--- 入力の @u v@ (重み付きなら @u v w@) が M 行並んだものを 'getIntGrid' で読み、
+-- 入力の @u v@ (重み付きなら @u v w@) が M 行並んだものを 'getIntGridU' で読み、
 -- 頂点番号の始まりを 'fromOneBased' / 'fromZeroBased' で示して渡す。
 --
 -- > [n, m] <- getInts
--- > es <- getIntGrid 2 m :: IO (Grid U.Vector Int)   -- 重み付きなら getIntGrid 3 m
+-- > es <- getIntGridU 2 m                           -- 重み付きなら getIntGridU 3 m
 -- > let g = undirectedGraph (fromOneBased es)       -- 有向なら directedGraph。0 始まりなら fromZeroBased
 --
 -- 頂点数は辺に出てくる最大の頂点番号 (0 始まりに直した後) + 1 になる。番号の大きい頂点が

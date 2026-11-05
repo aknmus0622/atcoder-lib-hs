@@ -19,7 +19,7 @@ import Input (ints)
 readUndirected :: IO AtcGraph
 readUndirected = do
   [_, m] <- ints
-  es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
+  es <- getIntGridU 2 m
   pure (undirectedGraph (fromOneBased es))
 
 -- | 有向グラフを読む (重み付き)。
@@ -28,14 +28,14 @@ readUndirected = do
 readDirected :: IO AtcGraph
 readDirected = do
   [_, m] <- ints
-  es <- getIntGrid 3 m :: IO (Grid U.Vector Int)
+  es <- getIntGridU 3 m
   pure (directedGraph (fromOneBased es))
 
 -- | 頂点番号が 0 始まりの入力 (@0 .. n - 1@) は 'fromZeroBased' で包む。
 readZeroBased :: IO AtcGraph
 readZeroBased = do
   [_, m] <- ints
-  es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
+  es <- getIntGridU 2 m
   pure (undirectedGraph (fromZeroBased es))
 
 -- | 0 始まりの辺を自分で組み立てる: 'graphFromList'。
@@ -111,7 +111,7 @@ bfsWithPath = do
 bfsWithoutGraph :: IO ()
 bfsWithoutGraph = do
   [h, w] <- ints
-  g <- getCharGrid w h :: IO (Grid U.Vector Char)
+  g <- getCharGridU w h
   let next i =
         let (r, c) = indexToPos w i
          in [posToIndex w q | (q, x) <- neighbors4 (r, c) g, x /= '#']
@@ -347,7 +347,7 @@ conditionalComponents = do
 readWeightedUndirected :: IO AtcGraph
 readWeightedUndirected = do
   [_, m] <- ints
-  es <- getIntGrid 3 m :: IO (Grid U.Vector Int)
+  es <- getIntGridU 3 m
   pure (undirectedGraph (fromOneBased es))
 
 -- | 入力のグリッドを辺のリストに直す: 'edgesOfGrid' と 'vertexCountOf'。
@@ -358,7 +358,7 @@ readWeightedUndirected = do
 edgeList :: IO ()
 edgeList = do
   [n, m] <- ints
-  es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
+  es <- getIntGridU 2 m
   let arcs' = edgesOfGrid "edgeList" (fromOneBased es)
   print (U.toList arcs')
   print (vertexCountOf arcs') -- 辺に出てくる最大の番号 + 1

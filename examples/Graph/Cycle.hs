@@ -15,7 +15,7 @@ showCycle = unwords . map (show . (+ 1)) . U.toList
 anyCycle :: IO ()
 anyCycle = do
   [n, m] <- ints
-  es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
+  es <- getIntGridU 2 m
   let g = graphFromList n [(u - 1, v - 1, 1) | [u, v] <- toRows es]
   putStrLn (maybe "-1" showCycle (findCycle g))
 
@@ -23,14 +23,14 @@ anyCycle = do
 namori :: IO ()
 namori = do
   n <- head <$> ints
-  es <- getIntGrid 2 n :: IO (Grid U.Vector Int)
+  es <- getIntGridU 2 n
   mapM_ (putStrLn . showCycle) (findCycle (undirectedGraph (fromOneBased es)))
 
 -- | 頂点 1 を通る最短閉路 (ABC376 D)。なければ @-1@。
 shortestThroughFirst :: IO ()
 shortestThroughFirst = do
   [n, m] <- ints
-  es <- getIntGrid 2 m :: IO (Grid U.Vector Int)
+  es <- getIntGridU 2 m
   let g = graphFromList n [(u - 1, v - 1, 1) | [u, v] <- toRows es]
   print (maybe (-1) fst (shortestCycleFrom g 0))
 
@@ -38,7 +38,7 @@ shortestThroughFirst = do
 girth :: IO ()
 girth = do
   [n, m] <- ints
-  es <- getIntGrid 3 m :: IO (Grid U.Vector Int)
+  es <- getIntGridU 3 m
   let g = undirectedGraphFromList n [(u - 1, v - 1, w) | [u, v, w] <- toRows es]
   print (maybe (-1) fst (shortestCycle g))
 
@@ -46,7 +46,7 @@ girth = do
 longestAndCount :: IO ()
 longestAndCount = do
   [n, m] <- ints
-  es <- getIntGrid 3 m :: IO (Grid U.Vector Int)
+  es <- getIntGridU 3 m
   let g = undirectedGraphFromList n [(u - 1, v - 1, w) | [u, v, w] <- toRows es]
   print (maybe (-1) fst (longestCycle g))
   print (countCycles g)

@@ -6,14 +6,13 @@ module Graph.Tree where
 import Atc
 import Control.Monad (replicateM_)
 import qualified Data.Vector as V
-import qualified Data.Vector.Unboxed as U
 import Input (ints)
 
 -- | 木を読む (辺は @u v@ で n - 1 行、1 始まり)。
 readTree :: IO AtcGraph
 readTree = do
   [n] <- ints
-  es <- getIntGrid 2 (n - 1) :: IO (Grid U.Vector Int)
+  es <- getIntGridU 2 (n - 1)
   pure (undirectedGraph (fromOneBased es))
 
 -- | 2 頂点の距離のクエリ: 'buildLCA' で表を作って 'distanceLCA'。

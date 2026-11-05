@@ -66,7 +66,7 @@
 --
 -- == 不変版を作る
 --
--- > let uf = buildUF n (fromOneBased es)    -- es は getIntGrid 2 m で読んだ辺 (Graph と同じ)
+-- > let uf = buildUF n (fromOneBased es)    -- es は getIntGridU 2 m で読んだ辺 (Graph と同じ)
 -- > let muf = buildWUF n (fromOneBased es)  -- 幅 3 (u v d: x_v - x_u = d)。矛盾したら Nothing
 -- > let uf = createUF $ do ...  -- ST の中で可変版を作って取り出す
 -- > uf <- freezeUF muf          -- 可変版を写し取る (以後も可変版は使える)
