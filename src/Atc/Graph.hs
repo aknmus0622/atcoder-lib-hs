@@ -23,6 +23,13 @@
 --
 -- グラフは有向か無向かを覚えている ('graphDirection')。"Atc.Graph.Cycle" はこれを見て動く。
 --
+-- ほかのグラフのモジュール:
+--
+-- * "Atc.Graph.Tree": LCA (2 点の距離・祖先) と全方位木 DP。
+-- * "Atc.Graph.Flow": 最大流・最小カット・最小費用流・二部マッチング。
+-- * "Atc.Graph.Cycle": 単純閉路。"Atc.Graph.Functional": Functional Graph。
+-- * 2-SAT はこのモジュールの 'solveTwoSat' (強連結成分分解で解く)。
+--
 -- == 結果の読み方
 --
 -- 距離は届かない頂点を @-1@ にする ('bfsDist' / 'dijkstraDist')。
