@@ -1,10 +1,12 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 
@@ -27,6 +29,7 @@
 -- > toRows g              t (s a)         m (t (s a))
 -- > flattenRow g        t a             m (t a)           (flattenColumn も同じ)
 -- > transposeGrid g     Grid v a        m (MGrid v m a)
+-- > chebyshevGrid x g   Grid v a        m (MGrid v m a)   (45 度回転。下の節を参照)
 -- > mapGrid f g         Grid v b        m (MGrid v m b)   (imapGrid も同じ)
 -- > mapRow f g          Grid v b        m (MGrid v m b)   (imapRow / mapColumn / imapColumn も同じ)
 -- > scanRow f z g       Grid v b        m (MGrid v m b)   (scanColumn も同じ)
@@ -143,6 +146,35 @@
 --
 -- 既にある 'Grid' から始めるなら 'thawGrid'。
 --
+-- == マンハッタン距離と 45 度回転
+--
+-- @(r, c)@ を 'toChebyshev' で @(X, Y) = (r + c, r - c)@ に移すと、マンハッタン距離が
+-- チェビシェフ距離 (各成分の差の max) になる。
+--
+-- > |r1 - r2| + |c1 - c2| == max |X1 - X2| |Y1 - Y2|
+-- > manhattanDist p q == chebyshevDist (toChebyshev p) (toChebyshev q)
+--
+-- X と Y を別々に扱えるので、「最も遠い点」は X と Y それぞれの端だけを見ればよい。
+-- 点の集合の端を 'ManhattanBox' に集めておくと、最遠距離が O(1) で出る。
+--
+-- > let box = foldMap boxOfPos ps
+-- > farthestFromBox q box          -- q から ps の中で最も遠い点までの距離
+-- > diameterOfBox box              -- ps の中の 2 点の距離の最大
+-- > t <- buildSG (<>) mempty (U.map boxOfPos ps)   -- 区間の点で最遠距離 (セグ木に載る)
+--
+-- 中心 @(r, c)@・半径 @d@ のひし形 (マンハッタン距離 d 以下) は、
+-- 回転後は軸に平行な正方形 @X ∈ [r+c-d, r+c+d]@, @Y ∈ [r-c-d, r-c+d]@ になる。
+-- 'chebyshevGrid' でグリッドごと回すと、2 次元累積和などの長方形の処理がそのまま使える。
+--
+-- > let s   = chebyshevGrid 0 g                     -- 一辺 H + W - 1。隙間は 0
+-- > let acc = scanColumn' (+) 0 (scanRow' (+) 0 s)  -- 2 次元累積和
+-- > -- (r, c) から距離 d 以下のマスの和: 中心を chebyshevPos で移し、±d の正方形の和を取る
+-- > -- (範囲は 0 .. H + W - 2 に切り詰める)
+--
+-- 回したグリッドは @(H + W - 1)^2@ マスある。H と W の差が大きいと元より大幅に大きくなる
+-- (H = 1, W = 2×10^5 で 4×10^10)。そのときや点がまばらなときは、点だけを
+-- 'toChebyshev' で移して座標圧縮・Fenwick の平面走査などで数える。
+--
 -- == 入力の頂点番号
 --
 -- 辺の並びなどを読んだ 'Grid' (や @U.Vector Int@) をグラフや Union-Find に渡すときは、
@@ -181,6 +213,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Generic as G
 import qualified Data.Vector.Generic.Mutable as GM
 import qualified Data.Vector.Mutable as MV
+import Data.Vector.Unboxed (MVector, Vector)
 import qualified Data.Vector.Unboxed as U
 
 -- ---------------------------------------------------------------------
@@ -207,6 +240,79 @@ inRange2D w h (r, c) = 0 <= r && r < h && 0 <= c && c < w
 -- | 上・下・左・右の順。範囲は見ない。
 around4 :: Pos -> [Pos]
 around4 (r, c) = [(r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)]
+
+-- | マンハッタン距離 (各成分の差の絶対値の和)。
+manhattanDist :: Pos -> Pos -> Int
+manhattanDist (r1, c1) (r2, c2) = abs (r1 - r2) + abs (c1 - c2)
+
+-- | チェビシェフ距離 (各成分の差の絶対値の max)。
+chebyshevDist :: Pos -> Pos -> Int
+chebyshevDist (r1, c1) (r2, c2) = max (abs (r1 - r2)) (abs (c1 - c2))
+
+-- | 45 度回転: @(r, c)@ を @(r + c, r - c)@ に。マンハッタン距離がチェビシェフ距離になる。
+toChebyshev :: Pos -> Pos
+toChebyshev (r, c) = (r + c, r - c)
+
+-- | 'toChebyshev' の逆。2 成分の偶奇が違う点は元の格子点がないので 'Nothing'。
+fromChebyshev :: Pos -> Maybe Pos
+fromChebyshev (x, y)
+  | odd (x - y) = Nothing
+  | otherwise = Just ((x + y) `div` 2, (x - y) `div` 2)
+
+-- | 幅 @w@ のグリッドのマス @(r, c)@ が、'chebyshevGrid' で回したグリッドのどこに来るか:
+-- @(r + c, r - c + w - 1)@ ('toChebyshev' を列が 0 以上になるようずらしたもの)。
+chebyshevPos :: Int -> Pos -> Pos
+chebyshevPos w (r, c) = (r + c, r - c + w - 1)
+
+-- ---------------------------------------------------------------------
+-- 点の集合の端 (マンハッタン距離の最遠点)
+
+-- | 点の集合を 'toChebyshev' で移したときの X と Y の最小・最大。
+-- @minX maxX minY maxY@ の順。'boxOfPos' で 1 点から作り、@<>@ で合わせる。
+-- 'mempty' は空の集合。
+data ManhattanBox = ManhattanBox !Int !Int !Int !Int
+  deriving (Eq, Show)
+
+instance Semigroup ManhattanBox where
+  ManhattanBox a b c d <> ManhattanBox a' b' c' d' =
+    ManhattanBox (min a a') (max b b') (min c c') (max d d')
+
+instance Monoid ManhattanBox where
+  mempty = ManhattanBox maxBound minBound maxBound minBound
+
+-- | 1 点だけの集合。
+boxOfPos :: Pos -> ManhattanBox
+boxOfPos p = let (x, y) = toChebyshev p in ManhattanBox x x y y
+
+-- | 点 @p@ から集合の中で最も遠い点までのマンハッタン距離。O(1)。空の集合なら 'error'。
+farthestFromBox :: Pos -> ManhattanBox -> Int
+farthestFromBox p box@(ManhattanBox x0 x1 y0 y1)
+  | box == mempty = error "Atc.Grid.farthestFromBox: 空の集合"
+  | otherwise = maximum [x - x0, x1 - x, y - y0, y1 - y]
+  where
+    (x, y) = toChebyshev p
+
+-- | 集合の中の 2 点のマンハッタン距離の最大。O(1)。空の集合なら 'error'。
+diameterOfBox :: ManhattanBox -> Int
+diameterOfBox box@(ManhattanBox x0 x1 y0 y1)
+  | box == mempty = error "Atc.Grid.diameterOfBox: 空の集合"
+  | otherwise = max (x1 - x0) (y1 - y0)
+
+-- U.Vector に置くためのインスタンス (4 つ組として並べる)。
+-- MVector / Vector は修飾なしで書く (atc bundle が書き出す export に合わせるため)。
+instance U.IsoUnbox ManhattanBox (Int, Int, Int, Int) where
+  toURepr (ManhattanBox a b c d) = (a, b, c, d)
+  fromURepr (a, b, c, d) = ManhattanBox a b c d
+
+newtype instance MVector s ManhattanBox = MV_ManhattanBox (MVector s (Int, Int, Int, Int))
+
+newtype instance Vector ManhattanBox = V_ManhattanBox (Vector (Int, Int, Int, Int))
+
+deriving via (U.As ManhattanBox (Int, Int, Int, Int)) instance GM.MVector U.MVector ManhattanBox
+
+deriving via (U.As ManhattanBox (Int, Int, Int, Int)) instance G.Vector U.Vector ManhattanBox
+
+instance U.Unbox ManhattanBox
 
 -- ---------------------------------------------------------------------
 -- 型
@@ -441,6 +547,13 @@ flattenColumn g = primRun g $ \(MGrid w h d) ->
 transposeGrid :: (GridOf k a) => k a -> Ret k (k a)
 transposeGrid g = primNew g transposeM
 
+-- | 45 度回したグリッド。マス @(r, c)@ は 'chebyshevPos' の位置 @(r + c, r - c + w - 1)@ に移る。
+-- 大きさは幅・高さとも @H + W - 1@ (空のグリッドなら 0)。元のマスに当たらない位置は @fill@ で埋める。
+-- O((H + W)^2)。
+{-# INLINE chebyshevGrid #-}
+chebyshevGrid :: (GridOf k a) => a -> k a -> Ret k (k a)
+chebyshevGrid fill g = primNew g (chebyshevM fill)
+
 -- | 全マスに @f@ を適用した新しいグリッド。要素型が変わってもよい。
 {-# INLINE mapGrid #-}
 mapGrid :: (GridOf k a, GridOf k b) => (a -> b) -> k a -> Ret k (k b)
@@ -587,6 +700,16 @@ transposeM (MGrid w h d) = do
       GM.unsafeRead d (r * w + c) >>= GM.unsafeWrite d' (c * h + r)
   pure (MGrid h w d')
 {-# INLINABLE transposeM #-}
+
+chebyshevM :: (PrimMonad n, GM.MVector v a) => a -> MGrid v n a -> n (MGrid v n a)
+chebyshevM fill (MGrid w h d) = do
+  let s = if w * h == 0 then 0 else w + h - 1
+  d' <- GM.replicate (s * s) fill
+  forM_ [0 .. h - 1] $ \r ->
+    forM_ [0 .. w - 1] $ \c ->
+      GM.unsafeRead d (r * w + c) >>= GM.unsafeWrite d' ((r + c) * s + (r - c + w - 1))
+  pure (MGrid s s d')
+{-# INLINABLE chebyshevM #-}
 
 imapM ::
   (PrimMonad n, GM.MVector v a, GM.MVector v b) => Bool -> (Pos -> a -> b) -> MGrid v n a -> n (MGrid v n b)

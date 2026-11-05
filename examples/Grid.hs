@@ -114,6 +114,43 @@ cumulativeSum = do
   print (scanRow (+) 0 g) -- 遅延版
   print (scanColumn (+) 0 g)
 
+-- | マンハッタン距離を 45 度回転でチェビシェフ距離にする: 'toChebyshev'。
+--
+-- @(r, c)@ を @(r + c, r - c)@ に移すと、距離は各成分の差の max になる。
+-- X と Y を別々に扱えるので、最も遠い点は端の点だけ見ればよい ('ManhattanBox')。
+manhattanRotation :: IO ()
+manhattanRotation = do
+  let ps = [(0, 0), (2, 5), (4, 1), (1, 3)]
+  print (manhattanDist (2, 5) (4, 1), chebyshevDist (toChebyshev (2, 5)) (toChebyshev (4, 1))) -- (6,6)
+  print (fromChebyshev (7, -3)) -- Just (2,5)
+  print (fromChebyshev (7, -2)) -- Nothing (偶奇が違う点は元の格子点がない)
+  let box = foldMap boxOfPos ps
+  print (diameterOfBox box) -- 7: (0, 0) と (2, 5)
+  print (farthestFromBox (3, 3) box) -- 6: (0, 0) まで
+  -- 区間の点の最遠距離はセグ木に載る
+  t <- buildSG (<>) mempty (U.fromList (map boxOfPos ps))
+  print . diameterOfBox =<< foldSG 1 4 t -- 6: (2, 5) と (4, 1)
+
+-- | ひし形の範囲の和: 'chebyshevGrid' で回してから 2 次元累積和。
+--
+-- 中心 @(r, c)@・半径 @d@ のひし形は、回したグリッドでは 'chebyshevPos' で移した中心の
+-- ±d の正方形になる。隙間は 0 で埋まっているので、正方形の和がそのままひし形の和。
+diamondSums :: IO ()
+diamondSums = do
+  [h, w] <- ints
+  g <- getIntGrid w h :: IO (Grid U.Vector Int)
+  let rot = chebyshevGrid 0 g
+      n = gridWidth rot -- h + w - 1
+      acc = scanColumn' (+) 0 (scanRow' (+) 0 rot)
+      clamp x = max 0 (min n x)
+      -- 回したグリッドの [x1, x2) × [y1, y2) の和
+      rect x1 x2 y1 y2 =
+        let (a, b, c', d') = (clamp x1, clamp x2, clamp y1, clamp y2)
+         in if a >= b || c' >= d' then 0 else elemAt (b, d') acc - elemAt (a, d') acc - elemAt (b, c') acc + elemAt (a, c') acc
+      diamond (r, c) d = let (x, y) = chebyshevPos w (r, c) in rect (x - d) (x + d + 1) (y - d) (y + d + 1)
+  print (diamond (1, 1) 1) -- (1, 1) とその上下左右
+  print (diamond (0, 0) (h + w)) -- 全体
+
 -- | 行ごと・列ごとにまとめる: 'foldRow' / 'foldColumn'。
 --
 -- 並べる先 (リスト / 'V.Vector' / 'U.Vector') は使い方から決まるので、
