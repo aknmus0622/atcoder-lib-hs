@@ -316,3 +316,80 @@ findDivisorI :: Integer -> Integer
 findDivisorI m
   | m < wordLimit = toInteger (findDivisorW (fromInteger m))
   | otherwise = findDivisorWith (\a b -> a * b `mod` m) m
+
+-- ---------------------------------------------------------------------
+-- 約数・篩
+--
+-- > divisorsOf 12                  -- [1,2,3,4,6,12]
+-- > let ps = primeSieve (10 ^ 6)   -- 10^6 までの最小素因数の表
+-- > isPrimePS 999983 ps            -- True。O(1)
+-- > factorsPS 360 ps               -- [2,2,2,3,3,5]。O(log x)
+-- > factorCountsPS 360 ps          -- [(2,3),(3,2),(5,1)]
+-- > primesPS ps                    -- 10^6 以下の素数 (昇順の U.Vector)
+--
+-- 1 つの数なら 'primeFactors' (ρ 法) で足りる。たくさんの数 (どれも N 以下) を
+-- 素因数分解するときは、篩を 1 回作って 'factorsPS' を使う。
+
+-- | @n@ の約数を昇順に。@n >= 1@。素因数分解 ('primeFactorCounts') から組み立てるので、
+-- @n@ が 10^18 程度でも速い (約数の個数ぶんの時間)。
+divisorsOf :: Int -> [Int]
+divisorsOf n
+  | n < 1 = error "Atc.Math.divisorsOf: 1 以上を渡す"
+  | otherwise = U.toList (U.modify Intro.sort (U.fromList (foldr expand [1] (primeFactorCounts n))))
+  where
+    expand (p, e) ds = [d * q | q <- take (e + 1) (iterate (* p) 1), d <- ds]
+
+-- | 最小素因数の表 (@0 .. n@)。0 と 1 は 0 を入れる。
+newtype PrimeSieve = PrimeSieve (U.Vector Int)
+
+-- | @0 .. n@ の最小素因数の表を作る。O(n log log n)。10^7 で 80MB。
+primeSieve :: Int -> PrimeSieve
+primeSieve n0 = PrimeSieve $ U.create $ do
+  let n = max n0 1
+  spf <- GM.replicate (n + 1) 0
+  let outer !p = when' (p <= n) $ do
+        x <- GM.unsafeRead spf p
+        when' (x == 0) $ do
+          GM.unsafeWrite spf p p
+          let inner !q = when' (q <= n) $ do
+                y <- GM.unsafeRead spf q
+                when' (y == 0) $ GM.unsafeWrite spf q p
+                inner (q + p)
+          when' (p <= n `div` p) $ inner (p * p)
+        outer (p + 1)
+  outer 2
+  pure spf
+  where
+    when' c a = if c then a else pure ()
+
+-- 表の範囲を確かめる。
+psCheck :: String -> Int -> PrimeSieve -> ()
+psCheck name x (PrimeSieve spf)
+  | x < 0 || x >= U.length spf = error ("Atc.Math." ++ name ++ ": " ++ show x ++ " が篩の範囲外")
+  | otherwise = ()
+{-# INLINE psCheck #-}
+
+-- | 素数か。O(1)。
+isPrimePS :: Int -> PrimeSieve -> Bool
+isPrimePS x s@(PrimeSieve spf) = psCheck "isPrimePS" x s `seq` (x >= 2 && U.unsafeIndex spf x == x)
+
+-- | 最小素因数。@x <= 1@ なら 0。O(1)。
+minFactorPS :: Int -> PrimeSieve -> Int
+minFactorPS x s@(PrimeSieve spf) = psCheck "minFactorPS" x s `seq` U.unsafeIndex spf x
+
+-- | 素因数を小さい順に、重複も含めて。@x <= 1@ は空。O(log x)。
+factorsPS :: Int -> PrimeSieve -> [Int]
+factorsPS x0 s@(PrimeSieve spf) = psCheck "factorsPS" x0 s `seq` go x0
+  where
+    go x
+      | x <= 1 = []
+      | otherwise = let p = U.unsafeIndex spf x in p : go (x `quot` p)
+
+-- | @(素因数, 個数)@ を小さい順に。O(log x)。
+factorCountsPS :: Int -> PrimeSieve -> [(Int, Int)]
+factorCountsPS x s = countRuns (factorsPS x s)
+
+-- | 表の範囲の素数 (昇順)。O(n)。
+primesPS :: PrimeSieve -> U.Vector Int
+primesPS (PrimeSieve spf) = U.findIndices id (U.imap (\i p -> i >= 2 && p == i) spf)
+

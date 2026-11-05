@@ -5,6 +5,7 @@
 module Math where
 
 import Atc
+import qualified Data.Vector.Unboxed as U
 import Input (int, ints)
 
 -- | 素数の個数を数える (ABC149 相当の素朴版)。
@@ -82,3 +83,18 @@ largestFactor :: (PrimeNum a) => a -> Maybe a
 largestFactor n = case primeFactors n of
   [] -> Nothing
   fs -> Just (last fs)
+
+-- | 約数を全部並べる: 'divisorsOf'。10^18 程度でも速い。
+listDivisors :: IO ()
+listDivisors = do
+  n <- int
+  print (divisorsOf n)
+
+-- | たくさんの数を素因数分解する: 'primeSieve' で表を作って 'factorsPS'。
+-- どの数も 10^6 以下なら、1 個あたり O(log x)。
+manyFactors :: IO ()
+manyFactors = do
+  xs <- ints
+  let ps = primeSieve (maximum (2 : xs))
+  mapM_ (\x -> print (factorsPS x ps)) xs
+  print (U.length (primesPS ps)) -- 表の範囲の素数の個数
