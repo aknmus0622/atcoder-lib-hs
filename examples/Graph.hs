@@ -422,3 +422,13 @@ buildInST n es = createGraph $ do
   g <- newMGraph Directed n
   addGraphEdges g [(u, v, 1) | (u, v) <- es]
   pure g
+
+-- | 2-SAT: 'solveTwoSat'。節 @(i, f, j, g)@ は「x_i == f または x_j == g」。
+--
+-- ここでは各行 @i j@ を「i と j のどちらかは真、両方は真にしない」(ちょうど片方) にする。
+twoSat :: IO ()
+twoSat = do
+  [n, m] <- ints
+  qs <- mapM (const ints) [1 .. m]
+  let cl = concat [[(i, True, j, True), (i, False, j, False)] | [i, j] <- qs]
+  print (fmap U.toList (solveTwoSat n cl))

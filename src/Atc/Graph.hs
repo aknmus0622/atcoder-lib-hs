@@ -853,6 +853,26 @@ strongComponentIdsC (AtcGraph n off tgt _ _) = runST $ do
   comp <- U.unsafeFreeze compM
   pure (k, U.map (\c -> k - 1 - c) comp)
 
+-- | 2-SAT。変数 @x_0 .. x_{n-1}@ と節 @(i, f, j, g)@ (「@x_i == f@ または @x_j == g@」) の並びから、
+-- 全ての節を満たす割り当てを 1 つ返す。なければ 'Nothing'。O(n + 節の数)。
+--
+-- > solveTwoSat 2 [(0, True, 1, True), (0, False, 1, False)]   -- x_0 xor x_1: Just [True,False] など
+-- > solveTwoSat 1 [(0, True, 0, True)]                         -- x_0 を真に固定: Just [True]
+--
+-- 「@x_i@ なら @x_j@」は @(i, False, j, True)@。リテラル @x_i == f@ を頂点にして、節 @a ∨ b@ を
+-- 辺 @¬a → b@ と @¬b → a@ にし、'strongComponentIds' で解く。
+solveTwoSat :: Int -> [(Int, Bool, Int, Bool)] -> Maybe (U.Vector Bool)
+solveTwoSat n clauses
+  | any (\(i, _, j, _) -> i < 0 || i >= n || j < 0 || j >= n) clauses = error "Atc.Graph.solveTwoSat: 範囲外の変数"
+  | U.any (\i -> cid U.! lit i True == cid U.! lit i False) (U.enumFromN 0 n) = Nothing
+  -- トポロジカル順で後ろにあるリテラルを真にする。
+  | otherwise = Just (U.generate n (\i -> cid U.! lit i True > cid U.! lit i False))
+  where
+    -- リテラル x_i == f の頂点。
+    lit i f = 2 * i + (if f then 0 else 1)
+    g = graphFromList (2 * n) (concat [[(lit i (not f), lit j g', 1), (lit j (not g'), lit i f, 1)] | (i, f, j, g') <- clauses])
+    (_, cid) = strongComponentIdsC g
+
 -- | 二重辺連結成分 (橋を除いた後の連結成分) の番号。成分は小さい頂点を含むものから。
 -- 'condense' すると橋の木 (非連結なら森) になる。無向グラフ用。O(n + m)。
 {-# INLINE bridgeComponentIds #-}
