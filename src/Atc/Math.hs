@@ -393,3 +393,80 @@ factorCountsPS x s = countRuns (factorsPS x s)
 primesPS :: PrimeSieve -> U.Vector Int
 primesPS (PrimeSieve spf) = U.findIndices id (U.imap (\i p -> i >= 2 && p == i) spf)
 
+-- ---------------------------------------------------------------------
+-- 合同式
+--
+-- 法を入力から読むときなど、'Atc.ModInt' の型を使わずに 'Int' で計算する。
+--
+-- > extendedGcd 12 18              -- (6, -1, 1)   (12 * (-1) + 18 * 1 = 6)
+-- > modInverse 3 7                 -- Just 5       (3 * 5 = 15 ≡ 1)
+-- > modInverse 2 4                 -- Nothing      (互いに素でない)
+-- > chineseRemainder [(2, 3), (3, 5)]   -- Just (8, 15)   (x ≡ 2 mod 3, x ≡ 3 mod 5)
+-- > floorSum 4 10 6 3              -- Σ_{i=0}^{3} floor((6 i + 3) / 10) = 0 + 0 + 1 + 2 = 3
+
+-- | @(g, x, y)@ で @a x + b y = g = gcd a b@ (@g >= 0@)。O(log)。
+extendedGcd :: Int -> Int -> (Int, Int, Int)
+extendedGcd a0 b0 = fix3 (go a0 b0 1 0 0 1)
+  where
+    go !r0 !r1 !s0 !s1 !t0 !t1
+      | r1 == 0 = (r0, s0, t0)
+      | otherwise = let q = r0 `quot` r1 in go r1 (r0 - q * r1) s1 (s0 - q * s1) t1 (t0 - q * t1)
+    fix3 (g, x, y) = if g < 0 then (negate g, negate x, negate y) else (g, x, y)
+
+-- | @a@ の逆元 (法 @m@、@0@ 以上 @m@ 未満)。@a@ と @m@ が互いに素でなければ 'Nothing'。
+-- 法は素数でなくてよい。@m >= 1@。O(log m)。
+modInverse :: Int -> Int -> Maybe Int
+modInverse a m
+  | m < 1 = error "Atc.Math.modInverse: 法は 1 以上"
+  | g /= 1 = if m == 1 then Just 0 else Nothing
+  | otherwise = Just (x `mod` m)
+  where
+    (g, x, _) = extendedGcd (a `mod` m) m
+
+-- | 中国剰余定理。@[(r_i, m_i)]@ (@x ≡ r_i mod m_i@、@m_i >= 1@) を全て満たす
+-- @x@ を @Just (x, lcm)@ (@0 <= x < lcm@) で返す。解がなければ 'Nothing'。空なら @Just (0, 1)@。
+-- 途中は 'Integer' で計算する (lcm が 'Int' に収まること)。
+chineseRemainder :: [(Int, Int)] -> Maybe (Int, Int)
+chineseRemainder = fmap (\(r, m) -> (fromInteger r, fromInteger m)) . foldl step (Just (0, 1))
+  where
+    step Nothing _ = Nothing
+    step (Just (r0, m0)) (r1i, m1i)
+      | m1i < 1 = error "Atc.Math.chineseRemainder: 法は 1 以上"
+      | (r1 - r0) `mod` g /= 0 = Nothing
+      | otherwise = Just ((r0 + m0 * k) `mod` l, l)
+      where
+        r1 = toInteger r1i `mod` m1
+        m1 = toInteger m1i
+        (g, p, _) = egcdI m0 m1
+        l = m0 `div` g * m1
+        -- m0 k ≡ r1 - r0 (mod m1) を解く。
+        k = ((r1 - r0) `div` g * p) `mod` (m1 `div` g)
+    egcdI a 0 = (a, 1, 0)
+    egcdI a b = let (g, x, y) = egcdI b (a `mod` b) in (g, y, x - (a `div` b) * y)
+
+-- | @Σ_{i=0}^{n-1} floor((a i + b) / m)@。@n >= 0@、@m >= 1@。@a@、@b@ は負でもよい。
+-- O(log m)。途中は 'Integer' で計算する (答えが 'Int' に収まること)。
+floorSum :: Int -> Int -> Int -> Int -> Int
+floorSum n0 m0 a0 b0
+  | n0 < 0 || m0 < 1 = error "Atc.Math.floorSum: n >= 0, m >= 1"
+  | otherwise = fromInteger (shiftA + shiftB + go n m a' b')
+  where
+    n = toInteger n0
+    m = toInteger m0
+    a = toInteger a0
+    b = toInteger b0
+    -- a, b を 0 以上 m 未満にする。
+    a' = a `mod` m
+    b' = b `mod` m
+    shiftA = (a `div` m) * (n * (n - 1) `div` 2)
+    shiftB = (b `div` m) * n
+    -- 0 <= a, b < m のとき。
+    go :: Integer -> Integer -> Integer -> Integer -> Integer
+    go nn mm aa bb
+      | nn == 0 = 0
+      | otherwise =
+          let s1 = (aa `div` mm) * (nn * (nn - 1) `div` 2) + (bb `div` mm) * nn
+              a2 = aa `mod` mm
+              b2 = bb `mod` mm
+              yMax = a2 * nn + b2
+           in if yMax < mm then s1 else s1 + go (yMax `div` mm) a2 mm (yMax `mod` mm)

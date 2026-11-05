@@ -98,3 +98,29 @@ manyFactors = do
   let ps = primeSieve (maximum (2 : xs))
   mapM_ (\x -> print (factorsPS x ps)) xs
   print (U.length (primesPS ps)) -- 表の範囲の素数の個数
+
+-- | 法を入力から読むとき: 'modInverse' (逆元)、'extendedGcd' (a x + b y = g)。
+modArith :: IO ()
+modArith = do
+  [a, b, m] <- ints
+  print (modInverse a m) -- 互いに素でなければ Nothing
+  print (extendedGcd a b)
+  print (fmap (\i -> b * i `mod` m) (modInverse a m)) -- b / a (mod m)
+
+-- | 中国剰余定理: @x ≡ r_i (mod m_i)@ を全て満たす最小の @x@ と、その周期。
+crtExample :: IO ()
+crtExample = do
+  n <- int
+  sys <- mapM (const (pair <$> ints)) [1 .. n]
+  print (chineseRemainder sys)
+
+-- | floor sum: Σ floor((a i + b) / m) を O(log m) で。
+floorSumExample :: IO ()
+floorSumExample = do
+  [n, m, a, b] <- ints
+  print (floorSum n m a b)
+
+-- 2 つの整数の行。
+pair :: [Int] -> (Int, Int)
+pair [a, b] = (a, b)
+pair _ = error "2 つの整数"
