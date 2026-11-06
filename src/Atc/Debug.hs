@@ -140,7 +140,14 @@ import Debug.Trace (trace)
 -- > solve xs = sum (dbg "偶数" (filter even xs))
 --
 -- 評価されなければ何も出ない。詳しくはモジュールの説明。
-dbg :: (Show a) => String -> a -> a
+dbg ::
+  (Show a) =>
+  -- | @label@: 表示するラベル (@label = 値@ の形で stderr に出る)
+  String ->
+  -- | @x@: 覗く値
+  a ->
+  -- | @x@ そのもの
+  a
 dbg label x = trace (label ++ " = " ++ show x) x
 
 -- | 同じものを do の中で。値を取り出さず、その場で強制して覗く。
@@ -148,5 +155,12 @@ dbg label x = trace (label ++ " = " ++ show x) x
 -- > main = do
 -- >   xs <- getInts
 -- >   dbgIO "入力" xs
-dbgIO :: (Show a) => String -> a -> IO ()
+dbgIO ::
+  (Show a) =>
+  -- | @label@: 表示するラベル (@label = 値@ の形で stderr に出る)
+  String ->
+  -- | @x@: 覗く値
+  a ->
+  -- | 覗くだけで結果はない
+  IO ()
 dbgIO label x = dbg label x `seq` pure ()

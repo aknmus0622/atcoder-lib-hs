@@ -4,6 +4,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE UnboxedTuples #-}
 
+-- | 整数の計算: 最大公約数・最小公倍数、素数判定・素因数分解、約数・篩、合同式 (法の積・累乗・逆元)。
 module Atc.Math where
 
 import Control.Monad.ST (runST)
@@ -15,9 +16,11 @@ import qualified Data.Vector.Generic.Mutable as GM
 import qualified Data.Vector.Unboxed as U
 import GHC.Exts (Word (W#), quotRemWord2#, timesWord2#)
 
+-- | リスト全体の最大公約数 (空なら 0)。
 gcdAll :: [Int] -> Int
 gcdAll = foldr gcd 0
 
+-- | リスト全体の最小公倍数 (空なら 1)。
 lcmAll :: [Int] -> Int
 lcmAll = foldr lcm 1
 
@@ -65,11 +68,27 @@ class (Integral a) => PrimeNum a where
   -- > primeFactorCounts (360 :: Int)   -- [(2,3),(3,2),(5,1)]
   primeFactorCounts :: a -> [(a, Int)]
 
-  -- | @a * b mod m@ (@0@ 以上 @m@ 未満)。@m >= 1@。'Int' でも桁あふれしない。
-  mulMod :: a -> a -> a -> a
+  -- | @a * b mod m@。'Int' でも桁あふれしない。
+  mulMod ::
+    -- | @a@: 掛ける数 (負でもよい)
+    a ->
+    -- | @b@: 掛ける数 (負でもよい)
+    a ->
+    -- | @m@: 法 (@m >= 1@)
+    a ->
+    -- | @a * b mod m@ (@0@ 以上 @m@ 未満)
+    a
 
-  -- | @a ^ e mod m@ (@0@ 以上 @m@ 未満)。@e >= 0@、@m >= 1@。'Int' でも桁あふれしない。
-  powMod :: a -> a -> a -> a
+  -- | @a ^ e mod m@。'Int' でも桁あふれしない。
+  powMod ::
+    -- | @a@: 底 (負でもよい)
+    a ->
+    -- | @e@: 指数 (@e >= 0@)
+    a ->
+    -- | @m@: 法 (@m >= 1@)
+    a ->
+    -- | @a ^ e mod m@ (@0@ 以上 @m@ 未満)
+    a
 
 instance PrimeNum Int where
   isPrime n = n >= 2 && isPrimeW (fromIntegral n)
@@ -106,15 +125,15 @@ instance PrimeNum Integer where
 -- ---------------------------------------------------------------------
 -- 型によらない部分
 
--- 並べ替え済みの素因数を (素因数, 個数) にまとめる。
+-- | 並べ替え済みの素因数を (素因数, 個数) にまとめる。
 countRuns :: (Eq a) => [a] -> [(a, Int)]
 countRuns fs = [(p, length g) | g@(p : _) <- group fs]
 
--- 小さい素因数は割り算で先に取る (ρ 法は 2 や小さい素数が苦手)。
+-- | 小さい素因数は割り算で先に取る (ρ 法は 2 や小さい素数が苦手)。
 smallPrimes :: [Int]
 smallPrimes = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47]
 
--- 素因数を最大 @size@ 個分の領域に書いて、最後に並べ替える。
+-- | 素因数を最大 @size@ 個分の領域に書いて、最後に並べ替える。
 -- 小さい素数で割ったあとの残りを、素数になるまで @divisorOf@ で割っていく。
 factorsWith ::
   (G.Vector v t, Integral t) => Int -> (t -> Bool) -> (t -> t) -> t -> v t
@@ -140,7 +159,7 @@ factorsWith size prime divisorOf n0 = runST $ do
   G.unsafeFreeze v
 {-# INLINE factorsWith #-}
 
--- Miller–Rabin 法。n は 5 以上の奇数。
+-- | Miller–Rabin 法。n は 5 以上の奇数。
 -- @mul@ は法 n の掛け算、@lift@ は普通の値を @mul@ 用の表現に直す関数、@one@ は 1 の表現。
 millerRabinWith :: (Integral t) => (t -> t -> t) -> (t -> t) -> t -> t -> [t] -> Bool
 millerRabinWith mul lift one n = all witness
@@ -166,7 +185,7 @@ millerRabinWith mul lift one n = all witness
        in x' == minusOne || (x' /= one && squares (k - 1) x')
 {-# INLINE millerRabinWith #-}
 
--- Pollard の ρ 法 (Brent の改良版)。合成数 m の 1 より大きい約数を 1 つ返す。m 自身が返ったら失敗。
+-- | Pollard の ρ 法 (Brent の改良版)。合成数 m の 1 より大きい約数を 1 つ返す。m 自身が返ったら失敗。
 -- f(x) = x^2 + c を回し、128 回分の |x - y| の積をまとめて gcd を取る。
 -- @mul@ は法 m の掛け算 (Montgomery 表現のままでもよい。表現が変わっても gcd は変わらない)。
 rhoWith :: forall t. (Integral t) => (t -> t -> t) -> t -> t -> t
@@ -198,7 +217,7 @@ rhoWith mul m c = outer 2 1 (1 :: Int)
     iterateN i y = iterateN (i - 1) (f y)
 {-# INLINE rhoWith #-}
 
--- 失敗したら定数 c を変えてやり直す。
+-- | 'rhoWith' で約数を 1 つ見つける。失敗したら定数 c を変えてやり直す。
 findDivisorWith :: (Integral t) => (t -> t -> t) -> t -> t
 findDivisorWith mul m = go 1
   where
@@ -208,10 +227,11 @@ findDivisorWith mul m = go 1
 -- ---------------------------------------------------------------------
 -- 2^63 未満: Word で計算する
 
+-- | 'Word' で計算する範囲の上限 (2^63)。
 wordLimit :: Integer
 wordLimit = 2 ^ (63 :: Int)
 
--- 負の数も法 m の中に入れてから Word にする。
+-- | 負の数も法 m の中に入れてから Word にする。
 toWordMod :: Int -> Int -> Word
 toWordMod a m = fromIntegral (a `mod` m)
 
@@ -220,14 +240,14 @@ mulHiLo :: Word -> Word -> (Word, Word)
 mulHiLo (W# a) (W# b) = case timesWord2# a b of (# h, l #) -> (W# h, W# l)
 {-# INLINE mulHiLo #-}
 
--- 128 bit の積を作って割る。a, b < m なので上位 64 bit は m 未満になり、割り算があふれない。
+-- | 128 bit の積を作って割る。a, b < m なので上位 64 bit は m 未満になり、割り算があふれない。
 mulModW :: Word -> Word -> Word -> Word
 mulModW (W# a) (W# b) (W# m) = case timesWord2# a b of
   (# hi, lo #) -> case quotRemWord2# hi lo m of
     (# _, r #) -> W# r
 {-# INLINE mulModW #-}
 
--- 法が奇数なら Montgomery 乗算、偶数なら割り算で。a < m。
+-- | 'Word' の累乗の剰余。法が奇数なら Montgomery 乗算、偶数なら割り算で。a < m。
 powModW :: Word -> Word -> Word -> Word
 powModW a e m
   | m == 1 = 0
@@ -237,12 +257,18 @@ powModW a e m
     go !_ 0 !acc = acc
     go x k acc = go (mulModW x x m) (k `div` 2) (if odd k then mulModW acc x m else acc)
 
--- Montgomery 乗算: x を x * 2^64 mod n で表すと、掛け算の剰余が割り算なしで求まる。
+-- | Montgomery 乗算: x を x * 2^64 mod n で表すと、掛け算の剰余が割り算なしで求まる。
 -- n は 2^63 未満の奇数。
---
--- 法 n、-n^(-1) mod 2^64、2^128 mod n。
-data Mont = Mont !Word !Word !Word
+data Mont
+  = Mont
+      -- | 法 n
+      !Word
+      -- | -n^(-1) mod 2^64
+      !Word
+      -- | 2^128 mod n
+      !Word
 
+-- | 法 n の Montgomery 乗算の定数を作る。
 montOf :: Word -> Mont
 montOf n = Mont n (negate inv) r2
   where
@@ -251,7 +277,7 @@ montOf n = Mont n (negate inv) r2
     r1 = negate n `mod` n
     r2 = mulModW r1 r1 n
 
--- (hi * 2^64 + lo) / 2^64 mod n。hi < n のとき。
+-- | (hi * 2^64 + lo) / 2^64 mod n。hi < n のとき。
 montReduce :: Mont -> Word -> Word -> Word
 montReduce (Mont n ni _) hi lo =
   let (mh, _) = mulHiLo (lo * ni) n
@@ -260,25 +286,29 @@ montReduce (Mont n ni _) hi lo =
    in if t >= n then t - n else t
 {-# INLINE montReduce #-}
 
+-- | Montgomery 表現どうしの積。
 montMul :: Mont -> Word -> Word -> Word
 montMul mo a b = let (hi, lo) = mulHiLo a b in montReduce mo hi lo
 {-# INLINE montMul #-}
 
+-- | 普通の値を Montgomery 表現にする。
 toMont :: Mont -> Word -> Word
 toMont mo@(Mont n _ r2) x = montMul mo (x `mod` n) r2
 {-# INLINE toMont #-}
 
+-- | Montgomery 表現を普通の値に戻す。
 fromMont :: Mont -> Word -> Word
 fromMont mo = montReduce mo 0
 {-# INLINE fromMont #-}
 
+-- | Montgomery 表現のままの累乗。
 montPow :: Mont -> Word -> Word -> Word
 montPow mo a0 e0 = go a0 e0 (toMont mo 1)
   where
     go !_ 0 !acc = acc
     go a e acc = go (montMul mo a a) (e `div` 2) (if odd e then montMul mo acc a else acc)
 
--- この 7 つの基底で調べれば 2^64 未満は必ず正しく判定できる。
+-- | 'Word' の素数判定。この 7 つの基底で調べれば 2^64 未満は必ず正しく判定できる。
 isPrimeW :: Word -> Bool
 isPrimeW n
   | n < 2 = False
@@ -288,17 +318,18 @@ isPrimeW n
       let mo = montOf n
        in millerRabinWith (montMul mo) (toMont mo) (toMont mo 1) n [2, 325, 9375, 28178, 450775, 9780504, 1795265022]
 
--- 素因数は 64 個未満。
+-- | 'Word' の素因数分解。素因数は 64 個未満。
 primeFactorsW :: Word -> U.Vector Word
 primeFactorsW = factorsWith 64 isPrimeW findDivisorW
 
--- 奇数で、47 以下の素因数を持たない合成数の約数。
+-- | 奇数で、47 以下の素因数を持たない合成数の約数。
 findDivisorW :: Word -> Word
 findDivisorW m = let mo = montOf m in findDivisorWith (montMul mo) m
 
 -- ---------------------------------------------------------------------
 -- 2^63 以上の Integer: 多倍長で計算する。途中で 2^63 未満になったら Word に回す。
 
+-- | 'Integer' の素数判定。
 isPrimeI :: Integer -> Bool
 isPrimeI n
   | n < wordLimit = isPrimeW (fromInteger n)
@@ -307,11 +338,13 @@ isPrimeI n
   | otherwise =
       millerRabinWith (\a b -> a * b `mod` n) id 1 n [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71]
 
+-- | 'Integer' の素因数分解。
 primeFactorsI :: Integer -> V.Vector Integer
 primeFactorsI n = factorsWith (bitLength n) isPrimeI findDivisorI n
   where
     bitLength x = length (takeWhile (> 0) (iterate (`div` 2) x))
 
+-- | 'Integer' の合成数の約数。
 findDivisorI :: Integer -> Integer
 findDivisorI m
   | m < wordLimit = toInteger (findDivisorW (fromInteger m))
@@ -362,7 +395,7 @@ primeSieve n0 = PrimeSieve $ U.create $ do
   where
     when' c a = if c then a else pure ()
 
--- 表の範囲を確かめる。
+-- | 表の範囲を確かめる (範囲外なら関数名付きで 'error')。
 psCheck :: String -> Int -> PrimeSieve -> ()
 psCheck name x (PrimeSieve spf)
   | x < 0 || x >= U.length spf = error ("Atc.Math." ++ name ++ ": " ++ show x ++ " が篩の範囲外")
@@ -370,23 +403,47 @@ psCheck name x (PrimeSieve spf)
 {-# INLINE psCheck #-}
 
 -- | 素数か。O(1)。
-isPrimePS :: Int -> PrimeSieve -> Bool
+isPrimePS ::
+  -- | @x@: 調べる数 (0 以上、表の範囲内)
+  Int ->
+  -- | 篩
+  PrimeSieve ->
+  -- | @x@ が素数か
+  Bool
 isPrimePS x s@(PrimeSieve spf) = psCheck "isPrimePS" x s `seq` (x >= 2 && U.unsafeIndex spf x == x)
 
 -- | 最小素因数。@x <= 1@ なら 0。O(1)。
-minFactorPS :: Int -> PrimeSieve -> Int
+minFactorPS ::
+  -- | @x@: 調べる数 (0 以上、表の範囲内)
+  Int ->
+  -- | 篩
+  PrimeSieve ->
+  -- | @x@ の最小素因数 (@x <= 1@ なら 0)
+  Int
 minFactorPS x s@(PrimeSieve spf) = psCheck "minFactorPS" x s `seq` U.unsafeIndex spf x
 
--- | 素因数を小さい順に、重複も含めて。@x <= 1@ は空。O(log x)。
-factorsPS :: Int -> PrimeSieve -> [Int]
+-- | 素因数分解。O(log x)。
+factorsPS ::
+  -- | @x@: 分解する数 (0 以上、表の範囲内)
+  Int ->
+  -- | 篩
+  PrimeSieve ->
+  -- | 素因数を小さい順に、重複も含めて (@x <= 1@ は空)
+  [Int]
 factorsPS x0 s@(PrimeSieve spf) = psCheck "factorsPS" x0 s `seq` go x0
   where
     go x
       | x <= 1 = []
       | otherwise = let p = U.unsafeIndex spf x in p : go (x `quot` p)
 
--- | @(素因数, 個数)@ を小さい順に。O(log x)。
-factorCountsPS :: Int -> PrimeSieve -> [(Int, Int)]
+-- | 素因数とその個数。O(log x)。
+factorCountsPS ::
+  -- | @x@: 分解する数 (0 以上、表の範囲内)
+  Int ->
+  -- | 篩
+  PrimeSieve ->
+  -- | @(素因数, 個数)@ を小さい順に
+  [(Int, Int)]
 factorCountsPS x s = countRuns (factorsPS x s)
 
 -- | 表の範囲の素数 (昇順)。O(n)。
@@ -404,8 +461,14 @@ primesPS (PrimeSieve spf) = U.findIndices id (U.imap (\i p -> i >= 2 && p == i) 
 -- > chineseRemainder [(2, 3), (3, 5)]   -- Just (8, 15)   (x ≡ 2 mod 3, x ≡ 3 mod 5)
 -- > floorSum 4 10 6 3              -- Σ_{i=0}^{3} floor((6 i + 3) / 10) = 0 + 0 + 1 + 2 = 3
 
--- | @(g, x, y)@ で @a x + b y = g = gcd a b@ (@g >= 0@)。O(log)。
-extendedGcd :: Int -> Int -> (Int, Int, Int)
+-- | 拡張ユークリッドの互除法。O(log)。
+extendedGcd ::
+  -- | @a@
+  Int ->
+  -- | @b@
+  Int ->
+  -- | @(g, x, y)@ で @a x + b y = g = gcd a b@ (@g >= 0@)
+  (Int, Int, Int)
 extendedGcd a0 b0 = fix3 (go a0 b0 1 0 0 1)
   where
     go !r0 !r1 !s0 !s1 !t0 !t1
@@ -413,9 +476,14 @@ extendedGcd a0 b0 = fix3 (go a0 b0 1 0 0 1)
       | otherwise = let q = r0 `quot` r1 in go r1 (r0 - q * r1) s1 (s0 - q * s1) t1 (t0 - q * t1)
     fix3 (g, x, y) = if g < 0 then (negate g, negate x, negate y) else (g, x, y)
 
--- | @a@ の逆元 (法 @m@、@0@ 以上 @m@ 未満)。@a@ と @m@ が互いに素でなければ 'Nothing'。
--- 法は素数でなくてよい。@m >= 1@。O(log m)。
-modInverse :: Int -> Int -> Maybe Int
+-- | 法 @m@ での @a@ の逆元。O(log m)。
+modInverse ::
+  -- | @a@: 逆元を求める数 (負でもよい)
+  Int ->
+  -- | @m@: 法 (@m >= 1@。素数でなくてよい)
+  Int ->
+  -- | @a@ の逆元 (@0@ 以上 @m@ 未満)。@a@ と @m@ が互いに素でなければ 'Nothing'
+  Maybe Int
 modInverse a m
   | m < 1 = error "Atc.Math.modInverse: 法は 1 以上"
   | g /= 1 = if m == 1 then Just 0 else Nothing
@@ -444,9 +512,19 @@ chineseRemainder = fmap (\(r, m) -> (fromInteger r, fromInteger m)) . foldl step
     egcdI a 0 = (a, 1, 0)
     egcdI a b = let (g, x, y) = egcdI b (a `mod` b) in (g, y, x - (a `div` b) * y)
 
--- | @Σ_{i=0}^{n-1} floor((a i + b) / m)@。@n >= 0@、@m >= 1@。@a@、@b@ は負でもよい。
+-- | @Σ_{i=0}^{n-1} floor((a i + b) / m)@。
 -- O(log m)。途中は 'Integer' で計算する (答えが 'Int' に収まること)。
-floorSum :: Int -> Int -> Int -> Int -> Int
+floorSum ::
+  -- | @n@: 項の数 (@n >= 0@)
+  Int ->
+  -- | @m@: 割る数 (@m >= 1@)
+  Int ->
+  -- | @a@: @i@ の係数 (負でもよい)
+  Int ->
+  -- | @b@: 定数項 (負でもよい)
+  Int ->
+  -- | @Σ_{i=0}^{n-1} floor((a i + b) / m)@
+  Int
 floorSum n0 m0 a0 b0
   | n0 < 0 || m0 < 1 = error "Atc.Math.floorSum: n >= 0, m >= 1"
   | otherwise = fromInteger (shiftA + shiftB + go n m a' b')

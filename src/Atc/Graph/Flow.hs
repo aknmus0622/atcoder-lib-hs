@@ -34,15 +34,23 @@ import qualified Data.Vector.Unboxed.Mutable as UM
 -- ---------------------------------------------------------------------
 -- 辺の置き場 (最大流と最小費用流で共通)
 
--- 辺の数 (長さ 1)、辺ごとの出発点・行き先・容量・流量・費用。足りなくなると 2 倍に広げる。
-data FlowEdges s = FlowEdges
-  !(UM.MVector s Int)
-  !(UM.MVector s Int)
-  !(UM.MVector s Int)
-  !(UM.MVector s Int)
-  !(UM.MVector s Int)
-  !(UM.MVector s Int)
+-- | 辺の置き場。辺ごとの配列は足りなくなると 2 倍に広げる。
+data FlowEdges s
+  = FlowEdges
+      -- | 辺の数 (長さ 1)
+      !(UM.MVector s Int)
+      -- | 辺ごとの出発点
+      !(UM.MVector s Int)
+      -- | 辺ごとの行き先
+      !(UM.MVector s Int)
+      -- | 辺ごとの容量
+      !(UM.MVector s Int)
+      -- | 辺ごとの流量
+      !(UM.MVector s Int)
+      -- | 辺ごとの費用
+      !(UM.MVector s Int)
 
+-- | 辺のない置き場を作る。
 {-# INLINE flNew #-}
 flNew :: (PrimMonad m) => m (MutVar (PrimState m) (FlowEdges (PrimState m)))
 flNew = do
@@ -50,12 +58,14 @@ flNew = do
   es <- FlowEdges c <$> UM.unsafeNew 4 <*> UM.unsafeNew 4 <*> UM.unsafeNew 4 <*> UM.unsafeNew 4 <*> UM.unsafeNew 4
   newMutVar es
 
+-- | 辺の数。
 {-# INLINE flCount #-}
 flCount :: (PrimMonad m) => MutVar (PrimState m) (FlowEdges (PrimState m)) -> m Int
 flCount r = do
   FlowEdges c _ _ _ _ _ <- readMutVar r
   UM.unsafeRead c 0
 
+-- | 辺を足して辺の番号を返す ('addEdgeMF' / 'addEdgeMCF' の本体)。範囲外の頂点や負の容量は関数名付きで 'error'。
 {-# INLINABLE flAdd #-}
 {-# SPECIALIZE flAdd :: String -> Int -> MutVar (PrimState IO) (FlowEdges (PrimState IO)) -> Int -> Int -> Int -> Int -> IO Int #-}
 {-# SPECIALIZE flAdd :: String -> Int -> MutVar (PrimState (ST s)) (FlowEdges (PrimState (ST s))) -> Int -> Int -> Int -> Int -> (ST s) Int #-}
@@ -81,6 +91,7 @@ flAdd name n r u v cap cost = do
   UM.unsafeWrite c 0 (k + 1)
   pure k
 
+-- | 辺の @(出発点, 行き先, 容量, 流量)@ ('edgeMF' / 'edgeMCF' の本体)。範囲外の番号は関数名付きで 'error'。
 {-# INLINE flEdge #-}
 flEdge :: (PrimMonad m) => String -> MutVar (PrimState m) (FlowEdges (PrimState m)) -> Int -> m (Int, Int, Int, Int)
 flEdge name r i = do
@@ -89,16 +100,23 @@ flEdge name r i = do
   when (i < 0 || i >= k) $ error ("Atc.Graph.Flow." ++ name ++ ": 辺の番号が範囲外 " ++ show i)
   (,,,) <$> UM.unsafeRead fr i <*> UM.unsafeRead to i <*> UM.unsafeRead cp i <*> UM.unsafeRead fl i
 
--- 残余グラフ: 辺 k の順向きの弧と逆向きの弧を、出発点ごとに並べる (CSR)。
--- 開始位置 (n + 1)、弧の行き先、残り容量 (可変)、対になる弧の位置、費用、辺 k の順向きの弧の位置。
-data Residual s = Residual
-  !(U.Vector Int)
-  !(U.Vector Int)
-  !(UM.MVector s Int)
-  !(U.Vector Int)
-  !(U.Vector Int)
-  !(U.Vector Int)
+-- | 残余グラフ: 辺 k の順向きの弧と逆向きの弧を、出発点ごとに並べる (CSR)。
+data Residual s
+  = Residual
+      -- | 出発点ごとの開始位置 (長さ n + 1)
+      !(U.Vector Int)
+      -- | 弧の行き先
+      !(U.Vector Int)
+      -- | 弧の残り容量 (可変)
+      !(UM.MVector s Int)
+      -- | 対になる弧の位置
+      !(U.Vector Int)
+      -- | 弧の費用
+      !(U.Vector Int)
+      -- | 辺 k の順向きの弧の位置
+      !(U.Vector Int)
 
+-- | 辺の置き場と今の流量から残余グラフを作る。
 {-# INLINABLE flResidual #-}
 {-# SPECIALIZE flResidual :: Int -> MutVar (PrimState IO) (FlowEdges (PrimState IO)) -> IO (Residual (PrimState IO)) #-}
 {-# SPECIALIZE flResidual :: Int -> MutVar (PrimState (ST s)) (FlowEdges (PrimState (ST s))) -> (ST s) (Residual (PrimState (ST s))) #-}
@@ -133,7 +151,7 @@ flResidual n r = do
   res <- U.thaw res0
   pure (Residual start arcTo res arcRev arcCost fwd)
 
--- 流した結果を辺の流量に書き戻す。
+-- | 流した結果を辺の流量に書き戻す。
 {-# INLINE flWriteBack #-}
 flWriteBack :: (PrimMonad m) => MutVar (PrimState m) (FlowEdges (PrimState m)) -> Residual (PrimState m) -> m ()
 flWriteBack r (Residual _ _ res _ _ fwd) = do
@@ -147,28 +165,64 @@ flWriteBack r (Residual _ _ res _ _ fwd) = do
 -- 最大流
 
 -- | 最大流のグラフ。
-data MaxFlow m = MaxFlow !Int !(MutVar (PrimState m) (FlowEdges (PrimState m)))
+data MaxFlow m
+  = MaxFlow
+      -- | 頂点数
+      !Int
+      -- | 辺の置き場
+      !(MutVar (PrimState m) (FlowEdges (PrimState m)))
 
 -- | 頂点数 @n@ で辺のないグラフ。
 {-# INLINE newMF #-}
 newMF :: (PrimMonad m) => Int -> m (MaxFlow m)
 newMF n = MaxFlow n <$> flNew
 
--- | @addEdgeMF u v cap g@: @u@ から @v@ へ容量 @cap@ の辺を足し、辺の番号を返す。O(1) (ならし)。
+-- | 辺を足す。O(1) (ならし)。
 {-# INLINE addEdgeMF #-}
-addEdgeMF :: (PrimMonad m) => Int -> Int -> Int -> MaxFlow m -> m Int
+addEdgeMF ::
+  (PrimMonad m) =>
+  -- | @u@: 出発点
+  Int ->
+  -- | @v@: 行き先
+  Int ->
+  -- | @cap@: 容量 (非負)
+  Int ->
+  -- | グラフ
+  MaxFlow m ->
+  -- | 足した辺の番号 (足した順に 0, 1, ..)
+  m Int
 addEdgeMF u v cap (MaxFlow n r) = flAdd "addEdgeMF" n r u v cap 0
 
--- | @s@ から @t@ へ流せるだけ流し、新しく流した量を返す。
+-- | 流せるだけ流す。
 {-# INLINE flowMF #-}
-flowMF :: (PrimMonad m) => Int -> Int -> MaxFlow m -> m Int
+flowMF ::
+  (PrimMonad m) =>
+  -- | @s@: 流し始める頂点
+  Int ->
+  -- | @t@: 流し込む頂点 (@s@ とは別)
+  Int ->
+  -- | グラフ
+  MaxFlow m ->
+  -- | 新しく流した量
+  m Int
 flowMF s t = flowLimitMF s t maxBound
 
--- | @s@ から @t@ へ、合わせて @limit@ まで流し、新しく流した量を返す。
+-- | 上限を決めて流す。
 {-# INLINABLE flowLimitMF #-}
 {-# SPECIALIZE flowLimitMF :: Int -> Int -> Int -> MaxFlow IO -> IO Int #-}
 {-# SPECIALIZE flowLimitMF :: Int -> Int -> Int -> MaxFlow (ST s) -> (ST s) Int #-}
-flowLimitMF :: (PrimMonad m) => Int -> Int -> Int -> MaxFlow m -> m Int
+flowLimitMF ::
+  (PrimMonad m) =>
+  -- | @s@: 流し始める頂点
+  Int ->
+  -- | @t@: 流し込む頂点 (@s@ とは別)
+  Int ->
+  -- | @limit@: 今回合わせて流す量の上限
+  Int ->
+  -- | グラフ
+  MaxFlow m ->
+  -- | 新しく流した量
+  m Int
 flowLimitMF s t limit (MaxFlow n r) = do
   when (s < 0 || s >= n || t < 0 || t >= n || s == t) $ error "Atc.Graph.Flow.flowLimitMF: s と t は範囲内で別の頂点"
   rg@(Residual start arcTo res arcRev _ _) <- flResidual n r
@@ -242,11 +296,18 @@ flowLimitMF s t limit (MaxFlow n r) = do
   flWriteBack r rg
   pure total
 
--- | 最小カット: 残余グラフで @s@ から行ける頂点が 'True'。流した後に呼ぶ。O(n + m)。
+-- | 最小カット。流した後に呼ぶ。O(n + m)。
 {-# INLINABLE minCutMF #-}
 {-# SPECIALIZE minCutMF :: Int -> MaxFlow IO -> IO (U.Vector Bool) #-}
 {-# SPECIALIZE minCutMF :: Int -> MaxFlow (ST s) -> (ST s) (U.Vector Bool) #-}
-minCutMF :: (PrimMonad m) => Int -> MaxFlow m -> m (U.Vector Bool)
+minCutMF ::
+  (PrimMonad m) =>
+  -- | @s@: 流し始めた頂点
+  Int ->
+  -- | グラフ
+  MaxFlow m ->
+  -- | 残余グラフで @s@ から行ける頂点が 'True' (最小カットの @s@ 側。頂点番号で引く)
+  m (U.Vector Bool)
 minCutMF s (MaxFlow n r) = do
   Residual start arcTo res _ _ _ <- flResidual n r
   resV <- U.freeze res
@@ -263,9 +324,16 @@ minCutMF s (MaxFlow n r) = do
     go [s]
     pure seen
 
--- | 辺 @i@ の @(出発点, 行き先, 容量, 流量)@。
+-- | 1 本の辺の今の様子。
 {-# INLINE edgeMF #-}
-edgeMF :: (PrimMonad m) => Int -> MaxFlow m -> m (Int, Int, Int, Int)
+edgeMF ::
+  (PrimMonad m) =>
+  -- | @i@: 辺の番号 ('addEdgeMF' が返したもの)
+  Int ->
+  -- | グラフ
+  MaxFlow m ->
+  -- | 辺 @i@ の @(出発点, 行き先, 容量, 流量)@
+  m (Int, Int, Int, Int)
 edgeMF i (MaxFlow _ r) = flEdge "edgeMF" r i
 
 -- | 全ての辺の @(出発点, 行き先, 容量, 流量)@ (足した順)。
@@ -275,9 +343,16 @@ edgesMF (MaxFlow _ r) = do
   k <- flCount r
   U.generateM k (flEdge "edgesMF" r)
 
--- | 二部マッチング: 左 @0 .. l - 1@ と右 @0 .. r - 1@ の間の辺 @(左, 右)@ から、
--- 最大マッチングの組 @(左, 右)@ を返す。O(m √(l + r))。
-maxBipartiteMatching :: Int -> Int -> [(Int, Int)] -> [(Int, Int)]
+-- | 二部マッチング: 最大マッチングを 1 つ求める。O(m √(l + r))。
+maxBipartiteMatching ::
+  -- | @l@: 左の頂点数 (左は @0 .. l - 1@)
+  Int ->
+  -- | @r@: 右の頂点数 (右は @0 .. r - 1@)
+  Int ->
+  -- | @es@: 左と右の間の辺 @(左, 右)@
+  [(Int, Int)] ->
+  -- | 最大マッチングの組 @(左, 右)@ (@es@ の中の順)
+  [(Int, Int)]
 maxBipartiteMatching l r es = runST $ do
   g <- newMF (l + r + 2)
   let s = l + r
@@ -295,38 +370,85 @@ maxBipartiteMatching l r es = runST $ do
 -- 最小費用流
 
 -- | 最小費用流のグラフ。
-data MinCostFlow m = MinCostFlow !Int !(MutVar (PrimState m) (FlowEdges (PrimState m)))
+data MinCostFlow m
+  = MinCostFlow
+      -- | 頂点数
+      !Int
+      -- | 辺の置き場
+      !(MutVar (PrimState m) (FlowEdges (PrimState m)))
 
 -- | 頂点数 @n@ で辺のないグラフ。
 {-# INLINE newMCF #-}
 newMCF :: (PrimMonad m) => Int -> m (MinCostFlow m)
 newMCF n = MinCostFlow n <$> flNew
 
--- | @addEdgeMCF u v cap cost g@: @u@ から @v@ へ容量 @cap@、1 単位あたりの費用 @cost@ (非負) の
--- 辺を足し、辺の番号を返す。
+-- | 辺を足す。
 {-# INLINE addEdgeMCF #-}
-addEdgeMCF :: (PrimMonad m) => Int -> Int -> Int -> Int -> MinCostFlow m -> m Int
+addEdgeMCF ::
+  (PrimMonad m) =>
+  -- | @u@: 出発点
+  Int ->
+  -- | @v@: 行き先
+  Int ->
+  -- | @cap@: 容量 (非負)
+  Int ->
+  -- | @cost@: 1 単位あたりの費用 (非負)
+  Int ->
+  -- | グラフ
+  MinCostFlow m ->
+  -- | 足した辺の番号 (足した順に 0, 1, ..)
+  m Int
 addEdgeMCF u v cap cost (MinCostFlow n r) = do
   when (cost < 0) $ error "Atc.Graph.Flow.addEdgeMCF: 費用は非負"
   flAdd "addEdgeMCF" n r u v cap cost
 
--- | 流せるだけ流したときの @(流量, 最小費用)@。
+-- | 流せるだけ流す。
 {-# INLINE flowMCF #-}
-flowMCF :: (PrimMonad m) => Int -> Int -> MinCostFlow m -> m (Int, Int)
+flowMCF ::
+  (PrimMonad m) =>
+  -- | @s@: 流し始める頂点
+  Int ->
+  -- | @t@: 流し込む頂点 (@s@ とは別)
+  Int ->
+  -- | グラフ
+  MinCostFlow m ->
+  -- | 流せるだけ流したときの @(流量, 最小費用)@
+  m (Int, Int)
 flowMCF s t = flowLimitMCF s t maxBound
 
--- | @limit@ まで流したときの @(流量, 最小費用)@。
+-- | 上限を決めて流す。
 {-# INLINE flowLimitMCF #-}
-flowLimitMCF :: (PrimMonad m) => Int -> Int -> Int -> MinCostFlow m -> m (Int, Int)
+flowLimitMCF ::
+  (PrimMonad m) =>
+  -- | @s@: 流し始める頂点
+  Int ->
+  -- | @t@: 流し込む頂点 (@s@ とは別)
+  Int ->
+  -- | @limit@: 流す量の上限
+  Int ->
+  -- | グラフ
+  MinCostFlow m ->
+  -- | @limit@ まで流したときの @(流量, 最小費用)@
+  m (Int, Int)
 flowLimitMCF s t limit g = last <$> slopeMCF s t limit g
 
--- | 流量と最小費用の関係の折れ線。@[(0, 0), (f_1, c_1), ..]@ で、流量 @f_i@ から @f_{i+1}@ の
--- 間は費用が直線で増える (傾きは増えていく)。最後の点が @limit@ まで (流せるだけ) 流したとき。
--- 何度か呼ぶと続きから流す (返る値は今回の分)。
+-- | 流量と最小費用の関係の折れ線。何度か呼ぶと続きから流す (返る値は今回の分)。
 {-# INLINABLE slopeMCF #-}
 {-# SPECIALIZE slopeMCF :: Int -> Int -> Int -> MinCostFlow IO -> IO [(Int, Int)] #-}
 {-# SPECIALIZE slopeMCF :: Int -> Int -> Int -> MinCostFlow (ST s) -> (ST s) [(Int, Int)] #-}
-slopeMCF :: (PrimMonad m) => Int -> Int -> Int -> MinCostFlow m -> m [(Int, Int)]
+slopeMCF ::
+  (PrimMonad m) =>
+  -- | @s@: 流し始める頂点
+  Int ->
+  -- | @t@: 流し込む頂点 (@s@ とは別)
+  Int ->
+  -- | @limit@: 流す量の上限 (@maxBound@ なら流せるだけ)
+  Int ->
+  -- | グラフ
+  MinCostFlow m ->
+  -- | 折れ線の頂点 @[(0, 0), (f_1, c_1), ..]@。流量 @f_i@ から @f_{i+1}@ の間は費用が直線で増える
+  -- (傾きは増えていく)。最後の点が @limit@ まで (流せるだけ) 流したとき
+  m [(Int, Int)]
 slopeMCF s t limit (MinCostFlow n r) = do
   when (s < 0 || s >= n || t < 0 || t >= n || s == t) $ error "Atc.Graph.Flow.slopeMCF: s と t は範囲内で別の頂点"
   rg@(Residual start arcTo res arcRev arcCost _) <- flResidual n r
@@ -411,9 +533,16 @@ slopeMCF s t limit (MinCostFlow n r) = do
   flWriteBack r rg
   pure pts
 
--- | 辺 @i@ の @(出発点, 行き先, 容量, 流量)@。
+-- | 1 本の辺の今の様子。
 {-# INLINE edgeMCF #-}
-edgeMCF :: (PrimMonad m) => Int -> MinCostFlow m -> m (Int, Int, Int, Int)
+edgeMCF ::
+  (PrimMonad m) =>
+  -- | @i@: 辺の番号 ('addEdgeMCF' が返したもの)
+  Int ->
+  -- | グラフ
+  MinCostFlow m ->
+  -- | 辺 @i@ の @(出発点, 行き先, 容量, 流量)@
+  m (Int, Int, Int, Int)
 edgeMCF i (MinCostFlow _ r) = flEdge "edgeMCF" r i
 
 -- | 全ての辺の @(出発点, 行き先, 容量, 流量)@ (足した順)。

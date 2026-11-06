@@ -40,13 +40,21 @@ type DFS = BFS
 
 -- | DFS を回す。本体の戻り値と、値の表を返す。
 {-# INLINE runDFS #-}
-runDFS :: (BFSKey k, DPValue a) => Space k -> (forall s. DFS s k a r) -> (r, k -> Maybe a)
+runDFS ::
+  (BFSKey k, DPValue a) =>
+  -- | 表の持ち方 ('dense' / 'sparse')
+  Space k ->
+  -- | 本体 ('visitS' / 'backtrackS' で潜る)
+  (forall s. DFS s k a r) ->
+  -- | 本体の戻り値と、値の表 (訪れていないキー・範囲外は 'Nothing')
+  (r, k -> Maybe a)
 runDFS = runBFS
 
 -- キーの状態は 0 = 未訪問, 1 = 潜っている途中, 2 = 抜けた。
 -- 入った順は取り出し順の記録 ('orderQ' と同じ)、抜けた順はキューの領域に末尾から積む。
 
--- 未訪問なら値を書いて body を回し、抜けるときの状態を done にする。
+-- | 'visitS' / 'backtrackS' の本体。未訪問なら値を書いて body を回し、
+-- 抜けるときに keep なら抜けた状態にして記録し、そうでなければ未訪問に戻す。
 {-# INLINE enterWith #-}
 enterWith :: (BFSKey k, DPValue a) => Bool -> k -> a -> DFS s k a () -> DFS s k a Bool
 enterWith keep k x body = BFS $ \e -> do
@@ -67,16 +75,34 @@ enterWith keep k x body = BFS $ \e -> do
             else writeFlag e i 0
           pure True
 
--- | まだ値のないキーなら値を書き、本体を実行して 'True'。訪問済みか範囲外なら 'False'。
+-- | まだ値のないキーなら値を書き、本体を実行する。
 -- 本体の中ではこのキーは 'onStackS' が 'True'、抜けたあとは 'False'。
 {-# INLINE visitS #-}
-visitS :: (BFSKey k, DPValue a) => k -> a -> DFS s k a () -> DFS s k a Bool
+visitS ::
+  (BFSKey k, DPValue a) =>
+  -- | @k@: 入るキー
+  k ->
+  -- | @x@: 書く値 (本体の中で読み書きして木 DP などに使える)
+  a ->
+  -- | @body@: 入ったときに実行する本体。この中で子へ再帰する
+  DFS s k a () ->
+  -- | 入って本体を実行したら 'True'。訪問済みか範囲外なら 'False'
+  DFS s k a Bool
 visitS = enterWith True
 
 -- | 'visitS' と同じだが、抜けるときに未訪問へ戻す (値も消える)。
 -- 別の経路からまた入れるので、単純パスを全部たどれる。入った順・抜けた順には記録しない。
 {-# INLINE backtrackS #-}
-backtrackS :: (BFSKey k, DPValue a) => k -> a -> DFS s k a () -> DFS s k a Bool
+backtrackS ::
+  (BFSKey k, DPValue a) =>
+  -- | @k@: 入るキー
+  k ->
+  -- | @x@: 書く値 (本体の中だけ読める)
+  a ->
+  -- | @body@: 入ったときに実行する本体
+  DFS s k a () ->
+  -- | 入って本体を実行したら 'True'。訪問済み (今の経路の上を含む) か範囲外なら 'False'
+  DFS s k a Bool
 backtrackS = enterWith False
 
 -- | 今潜っている経路の上にあるか ('visitS' / 'backtrackS' の本体の途中か)。

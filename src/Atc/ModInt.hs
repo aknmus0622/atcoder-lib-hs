@@ -52,8 +52,9 @@ import qualified Data.Vector.Generic.Mutable as GM
 import Data.Vector.Unboxed (MVector, Vector)
 import qualified Data.Vector.Unboxed as U
 
--- | 法を表す型のクラス。@modulusOf@ は引数を見ない (型だけで決まる)。
+-- | 法を表す型のクラス。
 class Modulus m where
+  -- | 法の値。引数は見ない (型だけで決まる)。
   modulusOf :: proxy m -> Int
 
 -- | 998244353。
@@ -100,8 +101,15 @@ mkMI a = r
     r = ModInt (a `mod` modulusMI r)
 {-# INLINE mkMI #-}
 
--- | 累乗。指数が負なら逆元の累乗。O(log |e|)。
-powMI :: (Modulus m) => ModInt m -> Int -> ModInt m
+-- | 累乗。O(log |e|)。
+powMI ::
+  (Modulus m) =>
+  -- | @x@: 底
+  ModInt m ->
+  -- | @e@: 指数 (負なら逆元の累乗)
+  Int ->
+  -- | @x ^ e@
+  ModInt m
 powMI x e
   | e < 0 = powMI (recip x) (negate e)
   | otherwise = go x e 1
@@ -133,7 +141,7 @@ instance (Modulus m) => Fractional (ModInt m) where
   {-# INLINE recip #-}
   fromRational q = fromInteger (numerator q) / fromInteger (denominator q)
 
--- 拡張ユークリッドで a の逆元 (法 m)。互いに素でなければ Nothing。
+-- | 拡張ユークリッドで a の逆元 (法 m)。互いに素でなければ Nothing。
 miInverse :: Int -> Int -> Maybe Int
 miInverse a m = go a m 1 0
   where
@@ -161,7 +169,12 @@ instance U.Unbox (ModInt m)
 -- 二項係数
 
 -- | 階乗と、その逆元の表 (@0 .. n@)。
-data BinomMI m = BinomMI !(U.Vector (ModInt m)) !(U.Vector (ModInt m))
+data BinomMI m
+  = BinomMI
+      -- | @0! .. n!@
+      !(U.Vector (ModInt m))
+      -- | @(0!)^-1 .. (n!)^-1@
+      !(U.Vector (ModInt m))
 
 -- | @0! .. n!@ とその逆元の表を作る。法は @n@ より大きい素数であること。O(n + log 法)。
 buildBinomMI :: (Modulus m) => Int -> BinomMI m
@@ -173,40 +186,78 @@ buildBinomMI n
     -- (n!)^-1 から順に (k - 1)!^-1 = k!^-1 * k で戻る。
     inv = U.reverse (U.scanl' (*) (recip (U.last fact)) (U.generate n (\i -> mkMI (n - i))))
 
--- 表の範囲を確かめる。
+-- | 表の範囲を確かめる (超えれば関数名付きで 'error')。
 binomCheck :: String -> Int -> BinomMI m -> ()
 binomCheck name n (BinomMI fact _)
   | n >= U.length fact = error ("Atc.ModInt." ++ name ++ ": " ++ show n ++ " が表の大きさ " ++ show (U.length fact - 1) ++ " を超える")
   | otherwise = ()
 {-# INLINE binomCheck #-}
 
--- | @n!@。@n@ が負なら 'error'。
-factMI :: Int -> BinomMI m -> ModInt m
+-- | @n!@。
+factMI ::
+  -- | @n@: 0 以上、表の大きさ以下 (負なら 'error')
+  Int ->
+  -- | 表
+  BinomMI m ->
+  -- | @n!@
+  ModInt m
 factMI n t@(BinomMI fact _) = binomCheck "factMI" n t `seq` (fact U.! n)
 {-# INLINE factMI #-}
 
 -- | @(n!)^-1@。
-invFactMI :: Int -> BinomMI m -> ModInt m
+invFactMI ::
+  -- | @n@: 0 以上、表の大きさ以下
+  Int ->
+  -- | 表
+  BinomMI m ->
+  -- | @(n!)^-1@
+  ModInt m
 invFactMI n t@(BinomMI _ inv) = binomCheck "invFactMI" n t `seq` (inv U.! n)
 {-# INLINE invFactMI #-}
 
--- | @nCk@。@k < 0@ や @k > n@ (や @n < 0@) なら 0。O(1)。
-chooseMI :: (Modulus m) => Int -> Int -> BinomMI m -> ModInt m
+-- | @nCk@。O(1)。
+chooseMI ::
+  (Modulus m) =>
+  -- | @n@: 表の大きさ以下
+  Int ->
+  -- | @k@
+  Int ->
+  -- | 表
+  BinomMI m ->
+  -- | @nCk@。@k < 0@ や @k > n@ (や @n < 0@) なら 0
+  ModInt m
 chooseMI n k t@(BinomMI fact inv)
   | n < 0 || k < 0 || k > n = 0
   | otherwise = binomCheck "chooseMI" n t `seq` (U.unsafeIndex fact n * U.unsafeIndex inv k * U.unsafeIndex inv (n - k))
 {-# INLINE chooseMI #-}
 
--- | @nPk@ (@n@ 個から @k@ 個を選んで並べる)。@k < 0@ や @k > n@ なら 0。O(1)。
-permMI :: (Modulus m) => Int -> Int -> BinomMI m -> ModInt m
+-- | @nPk@ (@n@ 個から @k@ 個を選んで並べる)。O(1)。
+permMI ::
+  (Modulus m) =>
+  -- | @n@: 表の大きさ以下
+  Int ->
+  -- | @k@
+  Int ->
+  -- | 表
+  BinomMI m ->
+  -- | @nPk@。@k < 0@ や @k > n@ なら 0
+  ModInt m
 permMI n k t@(BinomMI fact inv)
   | n < 0 || k < 0 || k > n = 0
   | otherwise = binomCheck "permMI" n t `seq` (U.unsafeIndex fact n * U.unsafeIndex inv (n - k))
 {-# INLINE permMI #-}
 
--- | @nHk = (n + k - 1)Ck@ (@n@ 種類から重複を許して @k@ 個)。@nH0 = 1@。
--- 表は @n + k - 1@ まで要る。O(1)。
-multichooseMI :: (Modulus m) => Int -> Int -> BinomMI m -> ModInt m
+-- | @nHk = (n + k - 1)Ck@ (@n@ 種類から重複を許して @k@ 個)。O(1)。
+multichooseMI ::
+  (Modulus m) =>
+  -- | @n@: 種類の数
+  Int ->
+  -- | @k@: 選ぶ個数
+  Int ->
+  -- | 表 (@n + k - 1@ まで要る)
+  BinomMI m ->
+  -- | @nHk@ (@nH0 = 1@)
+  ModInt m
 multichooseMI n k t
   | k == 0 = if n >= 0 then 1 else 0
   | otherwise = chooseMI (n + k - 1) k t

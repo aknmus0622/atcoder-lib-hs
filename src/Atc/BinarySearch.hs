@@ -40,9 +40,7 @@ import qualified Data.Vector.Generic as G
 import qualified Data.Vector.Generic.Mutable as GM
 import qualified Data.Vector.Unboxed as U
 
--- | @bisect ok ng p@: めぐる式の二分探索。@p ok@ が真、@p ng@ が偽で、その間で
--- 真偽が 1 回だけ切り替わるとき、境界の真の側の値を返す。@ok@ と @ng@ の大小は問わない。
--- @p@ は @ok@ と @ng@ そのものでは呼ばれない。
+-- | めぐる式の二分探索の型クラス。
 --
 -- * 'Int': @ok@ と @ng@ が隣り合うまで。O(log |ok - ng|)。
 -- * 'Double': 100 回で打ち切る (幅は元の 2^-100 倍になる)。
@@ -50,7 +48,16 @@ import qualified Data.Vector.Unboxed as U
 -- > bisect 0 (10 ^ 9 + 1) (\x -> x * x <= n)   -- floor (sqrt n)
 -- > bisect (-1) n (\i -> v U.! i < x)           -- x 未満の最後の添字 (ソート済みの v)
 class Bisect t where
-  bisect :: t -> t -> (t -> Bool) -> t
+  -- | @bisect ok ng p@: めぐる式の二分探索。@ok@ と @ng@ の大小は問わない。
+  bisect ::
+    -- | @ok@: @p@ が真になる側の端 (@p@ はここでは呼ばれない)
+    t ->
+    -- | @ng@: @p@ が偽になる側の端 (@p@ はここでは呼ばれない)
+    t ->
+    -- | @p x@: @x@ が真の側か。@ok@ と @ng@ の間で真偽が 1 回だけ切り替わること
+    (t -> Bool) ->
+    -- | 境界の真の側の値 (どこも偽なら @ok@)
+    t
 
 instance Bisect Int where
   bisect ok0 ng0 p = go ok0 ng0
@@ -72,9 +79,7 @@ instance Bisect Double where
         where
           mid = (ok + ng) / 2
 
--- | @ternaryMin lo hi f@: 三分探索。閉区間 @[lo, hi]@ で @f@ を最小にする @x@ を返す
--- (最小が複数あればそのどれか)。@f@ は下に凸 (谷が 1 つで、谷以外に平らな所がない) であること。
--- 最大を探すときは @negate . f@ か @Down . f@ を渡す。
+-- | 下に凸な関数の最小を探す三分探索の型クラス。
 --
 -- * 'Int': O(log (hi - lo)) 回 @f@ を呼ぶ。
 -- * 'Double': 200 回で打ち切る。
@@ -82,7 +87,18 @@ instance Bisect Double where
 -- > ternaryMin 0 (10 ^ 9) (\x -> abs (x - 7) + 3)   -- 7
 -- > ternaryMin 0 100 (\t -> (t - 1.5) ^ 2 :: Double) -- 1.5 付近
 class Ternary t where
-  ternaryMin :: (Ord b) => t -> t -> (t -> b) -> t
+  -- | @ternaryMin lo hi f@: 三分探索。閉区間 @[lo, hi]@ で @f@ を最小にする @x@ を返す。
+  -- 最大を探すときは @negate . f@ か @Down . f@ を渡す。
+  ternaryMin ::
+    (Ord b) =>
+    -- | @lo@: 区間の左端 (含む)
+    t ->
+    -- | @hi@: 区間の右端 (含む。'Int' で @lo > hi@ なら 'error')
+    t ->
+    -- | @f x@: @x@ での値。下に凸 (谷が 1 つで、谷以外に平らな所がない) であること
+    (t -> b) ->
+    -- | @f@ を最小にする @x@ (最小が複数あればそのどれか)
+    t
 
 instance Ternary Int where
   ternaryMin lo0 hi0 f
@@ -110,12 +126,13 @@ instance Ternary Double where
          in if f m1 <= f m2 then go (i - 1) lo m2 else go (i - 1) m1 hi
 
 -- | キー @k@ で整列した、要素 @a@ のベクタ。@v@ は 'V.Vector' や 'U.Vector'。
---
--- 塊は空でない。累積和は塊の数より 1 つ長く、先頭は 0。
 data SortedVec v k a = SortedVec
-  { keySV :: a -> k
-  , bucketsSV :: !(V.Vector (v a))
-  , prefixSV :: !(U.Vector Int)
+  { -- | 要素からキーを取る関数
+    keySV :: a -> k
+  , -- | ソート済みの塊 (空でない)
+    bucketsSV :: !(V.Vector (v a))
+  , -- | 塊までの要素数の累積和 (塊の数 + 1 個、先頭は 0)
+    prefixSV :: !(U.Vector Int)
   }
 
 instance (G.Vector v a, Show (v a)) => Show (SortedVec v k a) where
@@ -123,7 +140,14 @@ instance (G.Vector v a, Show (v a)) => Show (SortedVec v k a) where
 
 -- | @fromVecSV key v@: @key@ で安定にソートして作る。O(n log n)。
 {-# INLINE fromVecSV #-}
-fromVecSV :: (G.Vector v a, Ord k) => (a -> k) -> v a -> SortedVec v k a
+fromVecSV ::
+  (G.Vector v a, Ord k) =>
+  -- | @key x@: 要素 @x@ のキー
+  (a -> k) ->
+  -- | @v@: 要素 (ソートされていなくてよい)
+  v a ->
+  -- | @key@ で整列したベクタ (同じキーは元の順)
+  SortedVec v k a
 fromVecSV key v = fromSortedSV key (G.modify (Merge.sortBy (\x y -> compare (key x) (key y))) v)
 
 -- | すべての要素を順に並べたベクタ。O(n)。
@@ -131,23 +155,34 @@ fromVecSV key v = fromSortedSV key (G.modify (Merge.sortBy (\x y -> compare (key
 toVecSV :: G.Vector v a => SortedVec v k a -> v a
 toVecSV = G.concat . V.toList . bucketsSV
 
--- | @bisectSV p s@: 先頭から @p (キー)@ が真である要素の個数。
--- 言いかえると、最初に @p@ が偽になる添字 (なければ全体の個数)。O(log n)。
+-- | @bisectSV p s@: 先頭から @p (キー)@ が真である要素の個数。O(log n)。
 --
 -- @bisectSV (< k)@ が lower bound、@bisectSV (<= k)@ が upper bound。
--- @p@ は先頭側で真、後ろ側で偽でなければならない。
 {-# INLINE bisectSV #-}
-bisectSV :: G.Vector v a => (k -> Bool) -> SortedVec v k a -> Int
+bisectSV ::
+  G.Vector v a =>
+  -- | @p k@: キー @k@ についての条件。先頭側で真、後ろ側で偽でなければならない
+  (k -> Bool) ->
+  -- | @s@: ソート済みベクタ
+  SortedVec v k a ->
+  -- | 最初に @p@ が偽になる添字 (なければ全体の個数)
+  Int
 bisectSV p s@(SortedVec key bs pre)
   | b == V.length bs = U.last pre
   | otherwise = U.unsafeIndex pre b + firstFalseSV (p . key) (V.unsafeIndex bs b)
   where
     b = bucketOfSV p s
 
--- | @atSV i s@: 先頭から @i@ 番目 (0 始まり) の要素。負なら後ろから数える
--- (@-1@ が最後)。範囲外なら 'Nothing'。O(log n)。
+-- | @atSV i s@: 先頭から @i@ 番目の要素。O(log n)。
 {-# INLINE atSV #-}
-atSV :: G.Vector v a => Int -> SortedVec v k a -> Maybe a
+atSV ::
+  G.Vector v a =>
+  -- | @i@: 添字 (0 始まり)。負なら後ろから数える (@-1@ が最後)
+  Int ->
+  -- | @s@: ソート済みベクタ
+  SortedVec v k a ->
+  -- | その要素 (範囲外なら 'Nothing')
+  Maybe a
 atSV i0 (SortedVec _ bs pre)
   | i < 0 || i >= n = Nothing
   | otherwise = Just (G.unsafeIndex (V.unsafeIndex bs b) (i - U.unsafeIndex pre b))
@@ -158,7 +193,14 @@ atSV i0 (SortedVec _ bs pre)
 
 -- | 要素を 1 つ入れる。同じキーの要素があれば、その後ろに入る。O(√n)。
 {-# INLINE insertSV #-}
-insertSV :: (G.Vector v a, Ord k) => a -> SortedVec v k a -> SortedVec v k a
+insertSV ::
+  (G.Vector v a, Ord k) =>
+  -- | @x@: 入れる要素
+  a ->
+  -- | @s@: ソート済みベクタ
+  SortedVec v k a ->
+  -- | @x@ を入れたもの (@s@ はそのまま使える)
+  SortedVec v k a
 insertSV x s@(SortedVec key bs pre)
   | V.null bs = SortedVec key (V.singleton (G.singleton x)) (U.fromListN 2 [0, 1])
   | G.length new > maxBucketSV (U.last pre + 1) = rebuildSV key (V.concat [V.take b bs, V.fromListN 2 [l, r], V.drop (b + 1) bs])
@@ -172,9 +214,16 @@ insertSV x s@(SortedVec key bs pre)
     new = insertAtSV i x bucket
     (l, r) = G.splitAt (G.length new `div` 2) new
 
--- | キーが @k@ の要素を 1 つ (先頭のもの) 消す。なければそのまま返す。O(√n)。
+-- | キーが @k@ の要素を 1 つ (先頭のもの) 消す。O(√n)。
 {-# INLINE deleteKeySV #-}
-deleteKeySV :: (G.Vector v a, Ord k) => k -> SortedVec v k a -> SortedVec v k a
+deleteKeySV ::
+  (G.Vector v a, Ord k) =>
+  -- | @k@: 消す要素のキー
+  k ->
+  -- | @s@: ソート済みベクタ
+  SortedVec v k a ->
+  -- | 1 つ消したもの (なければ @s@ のまま)
+  SortedVec v k a
 deleteKeySV k s@(SortedVec key bs pre)
   | b == V.length bs || key (G.unsafeIndex bucket i) /= k = s
   | G.length bucket == 1 = rebuildSV key (V.take b bs <> V.drop (b + 1) bs)
@@ -186,7 +235,7 @@ deleteKeySV k s@(SortedVec key bs pre)
 
 -- 以下は内部用。
 
--- ソート済みのベクタから、約 √n 個ずつの塊に分けて作る。
+-- | ソート済みのベクタから、約 √n 個ずつの塊に分けて作る。
 {-# INLINE fromSortedSV #-}
 fromSortedSV :: G.Vector v a => (a -> k) -> v a -> SortedVec v k a
 fromSortedSV key v = rebuildSV key (V.generate m (\j -> G.slice (j * w) (min w (n - j * w)) v))
@@ -195,31 +244,31 @@ fromSortedSV key v = rebuildSV key (V.generate m (\j -> G.slice (j * w) (min w (
     w = maxBucketSV n `div` 2
     m = (n + w - 1) `div` w
 
--- 塊から累積和を作り直す。O(塊の数)。
+-- | 塊から累積和を作り直す。O(塊の数)。
 {-# INLINE rebuildSV #-}
 rebuildSV :: G.Vector v a => (a -> k) -> V.Vector (v a) -> SortedVec v k a
 rebuildSV key bs = SortedVec key bs (U.scanl' (+) 0 (U.convert (V.map G.length bs)))
 
--- 塊 @b@ の要素数が @d@ 変わったときの累積和。O(塊の数)。
+-- | 塊 @b@ の要素数が @d@ 変わったときの累積和。O(塊の数)。
 {-# INLINE shiftPrefixSV #-}
 shiftPrefixSV :: Int -> Int -> U.Vector Int -> U.Vector Int
 shiftPrefixSV b d = U.imap (\j p -> if j > b then p + d else p)
 
--- 要素数 n のときの塊の大きさの上限。これを超えたら半分に割る。
+-- | 要素数 n のときの塊の大きさの上限。これを超えたら半分に割る。
 maxBucketSV :: Int -> Int
 maxBucketSV n = max 32 (2 * floor (sqrt (fromIntegral n :: Double)))
 
--- 最後の要素で @p@ が偽になる最初の塊。どの塊でも真なら塊の数。
+-- | 最後の要素で @p@ が偽になる最初の塊。どの塊でも真なら塊の数。
 {-# INLINE bucketOfSV #-}
 bucketOfSV :: G.Vector v a => (k -> Bool) -> SortedVec v k a -> Int
 bucketOfSV p (SortedVec key bs _) = bisect (-1) (V.length bs) (\j -> p (key (G.last (V.unsafeIndex bs j)))) + 1
 
--- 塊の中で @p@ が偽になる最初の添字。
+-- | 塊の中で @p@ が偽になる最初の添字。
 {-# INLINE firstFalseSV #-}
 firstFalseSV :: G.Vector v a => (a -> Bool) -> v a -> Int
 firstFalseSV p v = bisect (-1) (G.length v) (p . G.unsafeIndex v) + 1
 
--- @i@ 番目に @x@ を入れたベクタ。O(長さ)。
+-- | @i@ 番目に @x@ を入れたベクタ。O(長さ)。
 {-# INLINE insertAtSV #-}
 insertAtSV :: G.Vector v a => Int -> a -> v a -> v a
 insertAtSV i x v = G.create $ do
@@ -231,7 +280,7 @@ insertAtSV i x v = G.create $ do
   where
     n = G.length v
 
--- @i@ 番目を除いたベクタ。O(長さ)。
+-- | @i@ 番目を除いたベクタ。O(長さ)。
 {-# INLINE deleteAtSV #-}
 deleteAtSV :: G.Vector v a => Int -> v a -> v a
 deleteAtSV i v = G.create $ do

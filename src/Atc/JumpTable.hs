@@ -42,10 +42,21 @@ newtype JumpTable v w = JumpTable (V.Vector (U.Vector Int, v w))
 
 -- | @buildJT merge maxK next w@: @k <= maxK@ の問い合わせに使える表を作る。O(n log maxK)。
 --
--- @w ! v@ は @v@ から @next ! v@ へ進むときの重み。
 -- @next@ の値が範囲外か、@next@ と @w@ の長さが違えば 'error'。
 {-# INLINE buildJT #-}
-buildJT :: (G.Vector v w) => (w -> w -> w) -> Int -> U.Vector Int -> v w -> JumpTable v w
+buildJT ::
+  (G.Vector v w) =>
+  -- | @merge w1 w2@: 先に進んだ区間の重み @w1@ と、続く区間の重み @w2@ を経路の順に合成する
+  -- (結合的であること。可換でなくてよい)
+  (w -> w -> w) ->
+  -- | @maxK@: 問い合わせる回数の上限 (0 以上)
+  Int ->
+  -- | @next@: @next ! v@ は状態 @v@ の次の状態 (@0 .. n - 1@)
+  U.Vector Int ->
+  -- | @w@: @w ! v@ は @v@ から @next ! v@ へ進むときの重み (長さ n)
+  v w ->
+  -- | ダブリングの表
+  JumpTable v w
 buildJT merge maxK next w
   | maxK < 0 = error "buildJT: maxK が負"
   | G.length w /= n = error "buildJT: next と重みの長さが違う"
@@ -59,14 +70,22 @@ buildJT merge maxK next w
       , G.generate n (\v -> merge (G.unsafeIndex wt v) (G.unsafeIndex wt (U.unsafeIndex nx v)))
       )
 
--- 表で扱える k か確かめる。
+-- | 表で扱える k か確かめる (範囲外なら関数名付きで 'error')。
 checkSteps :: String -> V.Vector a -> Int -> Int
 checkSteps name rows k
   | k < 0 || (k `shiftR` V.length rows) /= 0 = error (name ++ ": k が範囲外: " ++ show k)
   | otherwise = k
 
--- | 状態 @v@ から @k@ 回進んだ先。O(log k)。@k@ が表の範囲を超えると 'error'。
-jumpJT :: JumpTable v w -> Int -> Int -> Int
+-- | 状態 @v@ から @k@ 回進んだ先。O(log k)。
+jumpJT ::
+  -- | ダブリングの表
+  JumpTable v w ->
+  -- | @v@: 始める状態
+  Int ->
+  -- | @k@: 進む回数 (0 以上。表の範囲を超えると 'error')
+  Int ->
+  -- | 行き先の状態
+  Int
 jumpJT (JumpTable rows) v0 k0 = go 0 v0
   where
     k = checkSteps "jumpJT" rows k0
@@ -76,12 +95,25 @@ jumpJT (JumpTable rows) v0 k0 = go 0 v0
       | otherwise = go (i + 1) v
 
 -- | @foldJT op z t v k@: @v@ から @k@ 回進みながら、経路の順に重みを @z@ へ畳み込む。
--- @(行き先, 結果)@ を返す。O(log k) (@op@ の分を除く)。
+-- O(log k) (@op@ の分を除く)。
 --
--- @k = 0@ なら @(v, z)@。@op@ は重みそのものの合成でなくてもよく、
 -- @z@ をベクトル、重みを行列にすれば行列どうしの積なしで掛けられる。
 {-# INLINE foldJT #-}
-foldJT :: (G.Vector v w) => (b -> w -> b) -> b -> JumpTable v w -> Int -> Int -> (Int, b)
+foldJT ::
+  (G.Vector v w) =>
+  -- | @op b x@: ここまで畳み込んだ結果 @b@ に、続く区間の重み @x@ を足し込む
+  -- (重みそのものの合成でなくてもよい)
+  (b -> w -> b) ->
+  -- | @z@: 畳み込みの初めの値
+  b ->
+  -- | @t@: ダブリングの表
+  JumpTable v w ->
+  -- | @v@: 始める状態
+  Int ->
+  -- | @k@: 進む回数 (0 以上。表の範囲を超えると 'error')
+  Int ->
+  -- | @(行き先, 結果)@。@k = 0@ なら @(v, z)@
+  (Int, b)
 foldJT op z (JumpTable rows) v0 k0 = go 0 v0 z
   where
     k = checkSteps "foldJT" rows k0
@@ -92,14 +124,25 @@ foldJT op z (JumpTable rows) v0 k0 = go 0 v0 z
            in go (i + 1) (nx U.! v) (op b (wt G.! v))
       | otherwise = go (i + 1) v b
 
--- | @climbJT op z ok t v@: @ok@ を満たしたまま進める最大の回数を求める。
--- @(回数, 行き先, 結果)@ を返す。O(log maxK)。
+-- | @climbJT op z ok t v@: @ok@ を満たしたまま進める最大の回数を求める。O(log maxK)。
 --
--- @ok u b@ は「行き先が @u@、畳み込んだ結果が @b@ のところまで進んでよいか」。
--- 一度偽になったら、それ以上進んでも真に戻らないこと。0 回は調べずに進めるものとする。
 -- 回数の上限は表の段数で決まる @2 ^ 段数 - 1@。
 {-# INLINE climbJT #-}
-climbJT :: (G.Vector v w) => (b -> w -> b) -> b -> (Int -> b -> Bool) -> JumpTable v w -> Int -> (Int, Int, b)
+climbJT ::
+  (G.Vector v w) =>
+  -- | @op b x@: ここまで畳み込んだ結果 @b@ に、続く区間の重み @x@ を足し込む ('foldJT' と同じ)
+  (b -> w -> b) ->
+  -- | @z@: 畳み込みの初めの値
+  b ->
+  -- | @ok u b@: 行き先が @u@、畳み込んだ結果が @b@ のところまで進んでよいか。
+  -- 一度偽になったら、それ以上進んでも真に戻らないこと。0 回は調べずに進めるものとする
+  (Int -> b -> Bool) ->
+  -- | @t@: ダブリングの表
+  JumpTable v w ->
+  -- | @v@: 始める状態
+  Int ->
+  -- | @(回数, 行き先, 結果)@
+  (Int, Int, b)
 climbJT op z ok (JumpTable rows) v0 = go (V.length rows - 1) 0 v0 z
   where
     go !i !k !v !b

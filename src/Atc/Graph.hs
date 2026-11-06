@@ -109,11 +109,26 @@ import qualified Data.Vector.Unboxed.Mutable as UM
 -- 型
 
 -- | 作るときに決まるグラフの向き。
-data Direction = Directed | Undirected deriving (Eq, Show)
+data Direction
+  = -- | 有向
+    Directed
+  | -- | 無向 (両向きの有向辺として持つ)
+    Undirected
+  deriving (Eq, Show)
 
--- | 頂点数・各頂点の辺の開始位置 (長さ n + 1)・行き先・重み・向き。
--- 頂点 @v@ の辺は @[off ! v, off ! (v + 1))@ の範囲。
-data AtcGraph = AtcGraph !Int !(U.Vector Int) !(U.Vector Int) !(U.Vector Int) !Direction
+-- | 隣接リスト (CSR) の不変のグラフ。頂点 @v@ の辺は @[off ! v, off ! (v + 1))@ の範囲。
+data AtcGraph
+  = AtcGraph
+      -- | 頂点数
+      !Int
+      -- | @off@: 各頂点の辺の開始位置 (長さ n + 1)
+      !(U.Vector Int)
+      -- | 辺ごとの行き先
+      !(U.Vector Int)
+      -- | 辺ごとの重み
+      !(U.Vector Int)
+      -- | 向き
+      !Direction
 
 instance Show AtcGraph where
   show g = "AtcGraph {vertices = " ++ show (numVertices g) ++ ", edges = " ++ show (graphEdges g) ++ "}"
@@ -138,15 +153,28 @@ directedGraph g = buildCSR Directed (vertexCountOf es) es
   where
     es = edgesOfGrid "directedGraph" g
 
--- | 0 始まりの @(u, v, 重み)@ のリストから有向グラフを作る。
+-- | 0 始まりの辺のリストから有向グラフを作る。
 -- 無向にしたいときは 'undirectedGraphFromList'。
-graphFromList :: Int -> [(Int, Int, Int)] -> AtcGraph
+graphFromList ::
+  -- | @n@: 頂点数
+  Int ->
+  -- | @es@: 0 始まりの @(u, v, 重み)@ (@u@ から @v@ への辺)
+  [(Int, Int, Int)] ->
+  -- | 有向グラフ
+  AtcGraph
 graphFromList n es = buildCSR Directed n (U.fromList es)
 
--- | 0 始まりの @(u, v, 重み)@ のリストから無向グラフを作る。各辺は片方の向きだけ渡す。
-undirectedGraphFromList :: Int -> [(Int, Int, Int)] -> AtcGraph
+-- | 0 始まりの辺のリストから無向グラフを作る。
+undirectedGraphFromList ::
+  -- | @n@: 頂点数
+  Int ->
+  -- | @es@: 0 始まりの @(u, v, 重み)@。各辺は片方の向きだけ渡す
+  [(Int, Int, Int)] ->
+  -- | 無向グラフ
+  AtcGraph
 undirectedGraphFromList n es = buildCSR Undirected n (bothWays (U.fromList es))
 
+-- | 各辺に逆向きの辺を足す (無向グラフ用)。
 bothWays :: U.Vector (Int, Int, Int) -> U.Vector (Int, Int, Int)
 bothWays es = es U.++ U.map (\(u, v, c) -> (v, u, c)) es
 
@@ -196,35 +224,83 @@ class GraphKind g where
   type GraphUpdated g
 
   -- | CSR の上の処理を実行する。可変版は 'freezeGraph' してから実行する。
-  primGraph :: g -> (AtcGraph -> a) -> GraphRet g a
+  primGraph ::
+    -- | グラフ
+    g ->
+    -- | @f c@: CSR に写したグラフ @c@ から結果を計算する
+    (AtcGraph -> a) ->
+    -- | @f@ の結果
+    GraphRet g a
 
   -- | グラフを返す処理を実行する。可変版は新しい 'MGraph' を作り、元は変えない。
-  primGraphNew :: g -> (AtcGraph -> AtcGraph) -> GraphRet g g
+  primGraphNew ::
+    -- | グラフ
+    g ->
+    -- | @f c@: CSR に写したグラフ @c@ から新しいグラフを作る
+    (AtcGraph -> AtcGraph) ->
+    -- | @f@ が作ったグラフ (元と同じ型)
+    GraphRet g g
 
   -- | 有向か無向か。
   graphDirection :: g -> Direction
 
+  -- | 頂点数。
   numVertices :: g -> GraphRet g Int
 
   -- | 出ていく辺の数。無向グラフなら次数。
-  outDegree :: g -> Int -> GraphRet g Int
+  outDegree ::
+    -- | グラフ
+    g ->
+    -- | @v@: 頂点
+    Int ->
+    -- | @v@ から出ていく辺の数
+    GraphRet g Int
 
-  -- | @v@ から出る辺の @(行き先, 重み)@。
-  adjacent :: g -> Int -> GraphRet g (U.Vector (Int, Int))
+  -- | 頂点から出る辺。
+  adjacent ::
+    -- | グラフ
+    g ->
+    -- | @v@: 頂点
+    Int ->
+    -- | @v@ から出る辺の @(行き先, 重み)@
+    GraphRet g (U.Vector (Int, Int))
 
-  -- | @v@ から出る辺の行き先。
-  adjacentVertices :: g -> Int -> GraphRet g (U.Vector Int)
+  -- | 頂点から出る辺の行き先。
+  adjacentVertices ::
+    -- | グラフ
+    g ->
+    -- | @v@: 頂点
+    Int ->
+    -- | @v@ から出る辺の行き先
+    GraphRet g (U.Vector Int)
 
-  -- | @v@ から出る辺の重み。'adjacentVertices' と同じ順。
-  adjacentWeights :: g -> Int -> GraphRet g (U.Vector Int)
+  -- | 頂点から出る辺の重み。'adjacentVertices' と同じ順。
+  adjacentWeights ::
+    -- | グラフ
+    g ->
+    -- | @v@: 頂点
+    Int ->
+    -- | @v@ から出る辺の重み
+    GraphRet g (U.Vector Int)
 
-  -- | 0 始まりの @(u, v, 重み)@ の辺を足す。無向グラフは片方の向きだけ渡す。
-  -- 範囲外の頂点は 'error'。不変版は O(n + m + 足す辺の数)、可変版は O(足す辺の数)。
-  addGraphEdges :: g -> [(Int, Int, Int)] -> GraphUpdated g
+  -- | 辺を足す。範囲外の頂点は 'error'。
+  -- 不変版は O(n + m + 足す辺の数)、可変版は O(足す辺の数)。
+  addGraphEdges ::
+    -- | グラフ
+    g ->
+    -- | @es@: 0 始まりの @(u, v, 重み)@ の辺。無向グラフは片方の向きだけ渡す
+    [(Int, Int, Int)] ->
+    -- | 不変版は辺を足した新しいグラフ、可変版は書き換えて @()@
+    GraphUpdated g
 
-  -- | 頂点を @k@ 個増やす。新しい番号は @n, n + 1 ..@。
-  -- 不変版は O(n + k)、可変版は O(k)。
-  addGraphVertices :: g -> Int -> GraphUpdated g
+  -- | 頂点を増やす。不変版は O(n + k)、可変版は O(k)。
+  addGraphVertices ::
+    -- | グラフ
+    g ->
+    -- | @k@: 増やす個数 (0 以上)。新しい番号は @n, n + 1 ..@
+    Int ->
+    -- | 不変版は頂点を足した新しいグラフ、可変版は書き換えて @()@
+    GraphUpdated g
 
 instance GraphKind AtcGraph where
   type GraphRet AtcGraph a = a
@@ -296,22 +372,41 @@ instance (PrimMonad m) => GraphKind (MGraph m) where
 -- 可変版
 
 -- | 辺と頂点を足せるグラフ。@m@ は使うモナド (@IO@ か @ST s@)。
-data MGraph m = MGraph !Direction !(MutVar (PrimState m) (GraphBody (PrimState m)))
+data MGraph m
+  = MGraph
+      -- | 向き
+      !Direction
+      -- | 中身 (広げるときに差し替える)
+      !(MutVar (PrimState m) (GraphBody (PrimState m)))
 
--- 頂点数と辺数・頂点ごとの先頭の辺・末尾の辺・次数、辺ごとの行き先・重み・次の辺。
--- 辺は足した順につながる。領域が足りなくなると 2 倍に広げるので、全体を MutVar に入れる。
+-- | 'MGraph' の中身。辺は頂点ごとに足した順につながる (次の辺がない所は -1)。
+-- 領域が足りなくなると 2 倍に広げるので、全体を MutVar に入れる。
 data GraphBody s
   = GraphBody
+      -- | 長さ 2: 頂点数と辺数
       !(UM.MVector s Int)
+      -- | 頂点ごとの先頭の辺 (なければ -1)
       !(UM.MVector s Int)
+      -- | 頂点ごとの末尾の辺 (なければ -1)
       !(UM.MVector s Int)
+      -- | 頂点ごとの次数
       !(UM.MVector s Int)
+      -- | 辺ごとの行き先
       !(UM.MVector s Int)
+      -- | 辺ごとの重み
       !(UM.MVector s Int)
+      -- | 辺ごとの、同じ頂点の次の辺 (なければ -1)
       !(UM.MVector s Int)
 
--- | 頂点数 @n@ で辺のない可変グラフ。
-newMGraph :: (PrimMonad m) => Direction -> Int -> m (MGraph m)
+-- | 辺のない可変グラフ。
+newMGraph ::
+  (PrimMonad m) =>
+  -- | @dir@: 向き
+  Direction ->
+  -- | @n@: 頂点数
+  Int ->
+  -- | 辺のない可変グラフ
+  m (MGraph m)
 newMGraph dir n = thawGraph (buildCSR dir n U.empty)
 
 -- | 'AtcGraph' から可変グラフを作る。O(n + m)。
@@ -353,13 +448,14 @@ freezeGraph (MGraph dir r) = do
 createGraph :: (forall s. ST s (MGraph (ST s))) -> AtcGraph
 createGraph m = runST (m >>= freezeGraph)
 
+-- | 頂点が範囲内か確かめる (範囲外なら 'error')。
 checkVertex :: (PrimMonad m) => MGraph m -> Int -> m ()
 checkVertex (MGraph _ r) v = do
   GraphBody reg _ _ _ _ _ _ <- readMutVar r
   n <- UM.unsafeRead reg 0
   when (v < 0 || n <= v) $ error "Atc.Graph: 頂点番号が範囲外です"
 
--- 有向辺を 1 本、u の辺の末尾につなぐ。
+-- | 有向辺を 1 本、u の辺の末尾につなぐ。
 addArcM :: (PrimMonad m) => MGraph m -> Int -> Int -> Int -> m ()
 addArcM g@(MGraph _ r) u v c = do
   checkVertex g u
@@ -376,6 +472,7 @@ addArcM g@(MGraph _ r) u v c = do
   UM.unsafeModify deg (+ 1) u
   UM.unsafeWrite reg 1 (a + 1)
 
+-- | 辺ごとの配列を広げて差し替え、新しい中身を返す。
 growArcsM :: (PrimMonad m) => MutVar (PrimState m) (GraphBody (PrimState m)) -> GraphBody (PrimState m) -> m (GraphBody (PrimState m))
 growArcsM r (GraphBody reg hd tl deg tgt wt nxt) = do
   let extra = max 16 (UM.length tgt)
@@ -383,7 +480,7 @@ growArcsM r (GraphBody reg hd tl deg tgt wt nxt) = do
   writeMutVar r body
   pure body
 
--- v の辺について、辺ごとの配列の値を足した順に並べる。
+-- | v の辺について、辺ごとの配列の値を足した順に並べる。
 arcFieldM :: (PrimMonad m) => (GraphBody (PrimState m) -> UM.MVector (PrimState m) Int) -> MGraph m -> Int -> m (U.Vector Int)
 arcFieldM field g@(MGraph _ r) v = do
   checkVertex g v
@@ -405,6 +502,7 @@ arcFieldM field g@(MGraph _ r) v = do
 graphEdges :: (GraphKind g) => g -> GraphRet g ([(Int, Int, Int)])
 graphEdges g = primGraph g graphEdgesC
 
+-- | 'graphEdges' の本体。
 graphEdgesC :: AtcGraph -> [(Int, Int, Int)]
 graphEdgesC g = [(u, v, c) | u <- [0 .. numVertices g - 1], (v, c) <- U.toList (arcs g u)]
 
@@ -413,6 +511,7 @@ graphEdgesC g = [(u, v, c) | u <- [0 .. numVertices g - 1], (v, c) <- U.toList (
 reverseGraph :: (GraphKind g) => g -> GraphRet g g
 reverseGraph g = primGraphNew g reverseGraphC
 
+-- | 'reverseGraph' の本体。
 reverseGraphC :: AtcGraph -> AtcGraph
 reverseGraphC g = buildCSR (graphDirection g) (numVertices g) (U.fromList [(v, u, c) | (u, v, c) <- graphEdges g])
 
@@ -421,15 +520,17 @@ reverseGraphC g = buildCSR (graphDirection g) (numVertices g) (U.fromList [(v, u
 toDataGraph :: (GraphKind g) => g -> GraphRet g (DG.Graph)
 toDataGraph g = primGraph g toDataGraphC
 
+-- | 'toDataGraph' の本体。
 toDataGraphC :: AtcGraph -> DG.Graph
 toDataGraphC g = DG.buildG (0, numVertices g - 1) [(u, v) | (u, v, _) <- graphEdges g]
 
--- 範囲を見ない版 (中で使う)。
+-- | 範囲を見ない 'adjacentVertices' (中で使う)。
 targetsOf :: AtcGraph -> Int -> U.Vector Int
 targetsOf (AtcGraph _ off t _ _) v =
   let i = U.unsafeIndex off v in U.unsafeSlice i (U.unsafeIndex off (v + 1) - i) t
 {-# INLINE targetsOf #-}
 
+-- | 範囲を見ない 'adjacent' (中で使う)。
 arcs :: AtcGraph -> Int -> U.Vector (Int, Int)
 arcs (AtcGraph _ off t w _) v =
   let i = U.unsafeIndex off v
@@ -440,19 +541,35 @@ arcs (AtcGraph _ off t w _) v =
 -- ---------------------------------------------------------------------
 -- 最短路
 
--- | 重みを見ない (辺 1 本を 1 とする) 距離。始点は複数でもよい。届かない頂点は @-1@。O(n + m)。
+-- | 重みを見ない (辺 1 本を 1 とする) 距離。O(n + m)。
 {-# INLINE bfsDist #-}
-bfsDist :: (GraphKind g) => g -> [Int] -> GraphRet g (U.Vector Int)
+bfsDist ::
+  (GraphKind g) =>
+  -- | グラフ
+  g ->
+  -- | 始点 (複数でもよい)
+  [Int] ->
+  -- | 頂点ごとの、最も近い始点からの距離 (届かない頂点は @-1@)
+  GraphRet g (U.Vector Int)
 bfsDist g x = primGraph g (\c -> bfsDistC c x)
 
+-- | 'bfsDist' の本体。
 bfsDistC :: AtcGraph -> [Int] -> U.Vector Int
 bfsDistC g = fst . bfsDistPrevC g
 
--- | 'bfsDist' と、各頂点の直前の頂点 (始点と届かない頂点は @-1@)。経路は 'pathTo' で。
+-- | 'bfsDist' と、各頂点の直前の頂点。経路は 'pathTo' で。
 {-# INLINE bfsDistPrev #-}
-bfsDistPrev :: (GraphKind g) => g -> [Int] -> GraphRet g (U.Vector Int, U.Vector Int)
+bfsDistPrev ::
+  (GraphKind g) =>
+  -- | グラフ
+  g ->
+  -- | 始点 (複数でもよい)
+  [Int] ->
+  -- | @(距離, 直前の頂点)@。距離は 'bfsDist' と同じ。直前の頂点は始点と届かない頂点で @-1@
+  GraphRet g (U.Vector Int, U.Vector Int)
 bfsDistPrev g x = primGraph g (\c -> bfsDistPrevC c x)
 
+-- | 'bfsDistPrev' の本体。
 {-# INLINE bfsDistPrevC #-}
 bfsDistPrevC :: AtcGraph -> [Int] -> (U.Vector Int, U.Vector Int)
 bfsDistPrevC g = bfsCore (numVertices g) (\v f z -> U.foldM' f z (targetsOf g v))
@@ -462,10 +579,18 @@ bfsDistPrevC g = bfsCore (numVertices g) (\v f z -> U.foldM' f z (targetsOf g v)
 -- > -- 迷路: '#' 以外を 4 方向に進む
 -- > let nbr i = [posToIndex w q | (q, x) <- neighbors4 (indexToPos w i) maze, x /= '#']
 -- > bfsDistBy (w * h) nbr [0]
-bfsDistBy :: Int -> (Int -> [Int]) -> [Int] -> U.Vector Int
+bfsDistBy ::
+  -- | @n@: 頂点数 (頂点は @0 .. n - 1@)
+  Int ->
+  -- | @nbr v@: 頂点 @v@ から 1 歩で行ける頂点 (範囲内であること)
+  (Int -> [Int]) ->
+  -- | 始点 (複数でもよい)
+  [Int] ->
+  -- | 頂点ごとの、最も近い始点からの距離 (届かない頂点は @-1@)
+  U.Vector Int
 bfsDistBy n nbr = fst . bfsCore n (\v f z -> foldM f z (nbr v))
 
--- 隣接は「v の行き先で畳む」関数として受け取る。
+-- | BFS の本体 ('bfsDistPrev' / 'bfsDistBy')。隣接は「v の行き先で畳む」関数として受け取る。
 bfsCore ::
   Int -> (forall s b. Int -> (b -> Int -> ST s b) -> b -> ST s b) -> [Int] -> (U.Vector Int, U.Vector Int)
 bfsCore n foldNbr srcs = runST $ do
@@ -491,19 +616,35 @@ bfsCore n foldNbr srcs = runST $ do
   (,) <$> U.unsafeFreeze dist <*> U.unsafeFreeze prev
 {-# INLINE bfsCore #-}
 
--- | 重みが非負のときの距離。始点は複数でもよい。届かない頂点は @-1@。O(m log m)。
+-- | 重みが非負のときの距離。O(m log m)。
 {-# INLINE dijkstraDist #-}
-dijkstraDist :: (GraphKind g) => g -> [Int] -> GraphRet g (U.Vector Int)
+dijkstraDist ::
+  (GraphKind g) =>
+  -- | グラフ (重みは非負)
+  g ->
+  -- | 始点 (複数でもよい)
+  [Int] ->
+  -- | 頂点ごとの、最も近い始点からの距離 (届かない頂点は @-1@)
+  GraphRet g (U.Vector Int)
 dijkstraDist g x = primGraph g (\c -> dijkstraDistC c x)
 
+-- | 'dijkstraDist' の本体。
 dijkstraDistC :: AtcGraph -> [Int] -> U.Vector Int
 dijkstraDistC g = fst . dijkstraDistPrev g
 
--- | 'dijkstraDist' と、各頂点の直前の頂点 (始点と届かない頂点は @-1@)。経路は 'pathTo' で。
+-- | 'dijkstraDist' と、各頂点の直前の頂点。経路は 'pathTo' で。
 {-# INLINE dijkstraDistPrev #-}
-dijkstraDistPrev :: (GraphKind g) => g -> [Int] -> GraphRet g (U.Vector Int, U.Vector Int)
+dijkstraDistPrev ::
+  (GraphKind g) =>
+  -- | グラフ (重みは非負)
+  g ->
+  -- | 始点 (複数でもよい)
+  [Int] ->
+  -- | @(距離, 直前の頂点)@。距離は 'dijkstraDist' と同じ。直前の頂点は始点と届かない頂点で @-1@
+  GraphRet g (U.Vector Int, U.Vector Int)
 dijkstraDistPrev g x = primGraph g (\c -> dijkstraDistPrevC c x)
 
+-- | 'dijkstraDistPrev' の本体。二分ヒープを使う。
 dijkstraDistPrevC :: AtcGraph -> [Int] -> (U.Vector Int, U.Vector Int)
 dijkstraDistPrevC g@(AtcGraph n _ tgt _ _) srcs = runST $ do
   dist <- UM.replicate n (-1)
@@ -556,21 +697,36 @@ dijkstraDistPrevC g@(AtcGraph n _ tgt _ _) srcs = runST $ do
   foldM (\sz s -> UM.write dist s 0 >> push sz (0, s)) 0 srcs >>= go
   (,) <$> U.unsafeFreeze dist <*> U.unsafeFreeze prev
 
--- | 'bfsDistPrev' / 'dijkstraDistPrev' の直前の頂点から、始点から @t@ までの経路。
+-- | 直前の頂点の表から、始点から @t@ までの経路を取り出す。
 -- @t@ に届くときだけ使う (届かなければ @[t]@ になる)。
-pathTo :: (G.Vector v Int) => v Int -> Int -> [Int]
+pathTo ::
+  (G.Vector v Int) =>
+  -- | @prev@: 'bfsDistPrev' / 'dijkstraDistPrev' の直前の頂点 (始点は @-1@)
+  v Int ->
+  -- | @t@: 終点
+  Int ->
+  -- | 始点から @t@ までの頂点 (両端を含む)
+  [Int]
 pathTo prev = go []
   where
     go acc v
       | v == -1 = acc
       | otherwise = go (v : acc) (prev G.! v)
 
--- | 負の重みがあってもよい距離。届かない頂点は 'Nothing'。
--- @s@ から届く負の閉路があれば 'Nothing'。O(nm)。
+-- | 負の重みがあってもよい距離。O(nm)。
 {-# INLINE bellmanFord #-}
-bellmanFord :: (GraphKind g) => g -> Int -> GraphRet g (Maybe (V.Vector (Maybe Int)))
+bellmanFord ::
+  (GraphKind g) =>
+  -- | グラフ (負の重みがあってもよい)
+  g ->
+  -- | @s@: 始点
+  Int ->
+  -- | 頂点ごとの @s@ からの距離 (届かない頂点は 'Nothing')。
+  -- @s@ から届く負の閉路があれば全体が 'Nothing'
+  GraphRet g (Maybe (V.Vector (Maybe Int)))
 bellmanFord g x = primGraph g (\c -> bellmanFordC c x)
 
+-- | 'bellmanFord' の本体。
 bellmanFordC :: AtcGraph -> Int -> Maybe (V.Vector (Maybe Int))
 bellmanFordC g s = runST $ do
   dist <- UM.replicate n inf
@@ -605,6 +761,7 @@ bellmanFordC g s = runST $ do
 floydWarshall :: (GraphKind g) => g -> GraphRet g (Maybe (Grid V.Vector (Maybe Int)))
 floydWarshall g = primGraph g floydWarshallC
 
+-- | 'floydWarshall' の本体。
 floydWarshallC :: AtcGraph -> Maybe (Grid V.Vector (Maybe Int))
 floydWarshallC g = runST $ do
   d <- UM.replicate (n * n) inf
@@ -627,13 +784,15 @@ floydWarshallC g = runST $ do
   where
     n = numVertices g
 
--- 'bellmanFord' / 'floydWarshall' の中で、届かないことを表す値。
+-- | 'bellmanFord' / 'floydWarshall' の中で、届かないことを表す値。
 inf :: Int
 inf = maxBound
 
+-- | 'inf' を 'Nothing' に、それ以外を 'Just' にする。
 fromInf :: Int -> Maybe Int
 fromInf x = if x == inf then Nothing else Just x
 
+-- | @rep n f@ は @f 0 .. f (n - 1)@ を順に実行する。
 rep :: (Monad m) => Int -> (Int -> m ()) -> m ()
 rep n f = go 0
   where
@@ -651,6 +810,7 @@ rep n f = go 0
 minimumSpanningTree :: (GraphKind g) => g -> GraphRet g (Int, [(Int, Int, Int)])
 minimumSpanningTree g = primGraph g minimumSpanningTreeC
 
+-- | 'minimumSpanningTree' の本体。
 minimumSpanningTreeC :: AtcGraph -> (Int, [(Int, Int, Int)])
 minimumSpanningTreeC g = runST $ do
   es <- U.thaw (U.fromList [e | e@(u, v, _) <- graphEdges g, u /= v])
@@ -668,6 +828,7 @@ minimumSpanningTreeC g = runST $ do
 bipartiteColoring :: (GraphKind g) => g -> GraphRet g (Maybe (U.Vector Int))
 bipartiteColoring g = primGraph g bipartiteColoringC
 
+-- | 'bipartiteColoring' の本体。
 bipartiteColoringC :: AtcGraph -> Maybe (U.Vector Int)
 bipartiteColoringC g = runST $ do
   col <- UM.replicate n (-1)
@@ -709,6 +870,7 @@ bipartiteColoringC g = runST $ do
 isBipartite :: (GraphKind g) => g -> GraphRet g Bool
 isBipartite g = primGraph g isBipartiteC
 
+-- | 'isBipartite' の本体。
 isBipartiteC :: AtcGraph -> Bool
 isBipartiteC = maybe False (const True) . bipartiteColoring
 
@@ -720,6 +882,7 @@ isBipartiteC = maybe False (const True) . bipartiteColoring
 topologicalOrder :: (GraphKind g) => g -> GraphRet g (Maybe (U.Vector Int))
 topologicalOrder g = primGraph g topologicalOrderC
 
+-- | 'topologicalOrder' の本体 (入次数 0 の頂点から取り除く)。
 topologicalOrderC :: AtcGraph -> Maybe (U.Vector Int)
 topologicalOrderC g@(AtcGraph n _ tgt _ _) = runST $ do
   indeg <- U.thaw (U.accumulate (+) (U.replicate n 0) (U.map (\v -> (v, 1 :: Int)) tgt))
@@ -777,18 +940,26 @@ topologicalOrderC g@(AtcGraph n _ tgt _ _) = runST $ do
 componentIds :: (GraphKind g) => g -> GraphRet g (Int, U.Vector Int)
 componentIds g = primGraph g componentIdsC
 
+-- | 'componentIds' の本体。
 componentIdsC :: AtcGraph -> (Int, U.Vector Int)
 componentIdsC = componentIdsWithC (\_ _ _ -> True)
 
--- | @componentIdsWith ok g@: @ok u v 重み@ が真の辺だけを使った連結成分の番号。
+-- | 条件を満たす辺だけを使った連結成分の番号。
 -- 「重みが K 以下の辺だけで繋がっているか」のような条件付きの連結性に使う。
--- 番号の振り方は 'componentIds' と同じ。有向グラフでも向きを無視する。
--- 無向グラフでは各辺が両向き (@ok u v w@ と @ok v u w@) で呼ばれ、どちらかが真なら使う。
--- O(n + m α(n))。
+-- 有向グラフでも向きを無視する。O(n + m α(n))。
 {-# INLINE componentIdsWith #-}
-componentIdsWith :: (GraphKind g) => (Int -> Int -> Int -> Bool) -> g -> GraphRet g (Int, U.Vector Int)
+componentIdsWith ::
+  (GraphKind g) =>
+  -- | @ok u v w@: 辺 @u -> v@ (重み @w@) を使うなら真。
+  -- 無向グラフでは各辺が両向き (@ok u v w@ と @ok v u w@) で呼ばれ、どちらかが真なら使う
+  (Int -> Int -> Int -> Bool) ->
+  -- | グラフ
+  g ->
+  -- | @(成分の数, 元の番号 → 成分の番号)@。番号の振り方は 'componentIds' と同じ
+  GraphRet g (Int, U.Vector Int)
 componentIdsWith ok g = primGraph g (componentIdsWithC ok)
 
+-- | 'componentIdsWith' の本体 (Union-Find で辺をつなぐ)。
 componentIdsWithC :: (Int -> Int -> Int -> Bool) -> AtcGraph -> (Int, U.Vector Int)
 componentIdsWithC ok g@(AtcGraph n _ tgt wt _) = runST $ do
   uf <- newUF n
@@ -805,7 +976,8 @@ componentIdsWithC ok g@(AtcGraph n _ tgt wt _) = runST $ do
 strongComponentIds :: (GraphKind g) => g -> GraphRet g (Int, U.Vector Int)
 strongComponentIds g = primGraph g strongComponentIdsC
 
--- Tarjan 法。再帰の代わりに、呼び出しのスタック cs と頂点ごとの次に見る辺 it を持つ。
+-- | 'strongComponentIds' の本体。Tarjan 法。
+-- 再帰の代わりに、呼び出しのスタック cs と頂点ごとの次に見る辺 it を持つ。
 -- 成分は吸い込む側 (逆トポロジカル順) から決まるので、最後に番号を反転する。
 strongComponentIdsC :: AtcGraph -> (Int, U.Vector Int)
 strongComponentIdsC (AtcGraph n off tgt _ _) = runST $ do
@@ -860,15 +1032,20 @@ strongComponentIdsC (AtcGraph n off tgt _ _) = runST $ do
   comp <- U.unsafeFreeze compM
   pure (k, U.map (\c -> k - 1 - c) comp)
 
--- | 2-SAT。変数 @x_0 .. x_{n-1}@ と節 @(i, f, j, g)@ (「@x_i == f@ または @x_j == g@」) の並びから、
--- 全ての節を満たす割り当てを 1 つ返す。なければ 'Nothing'。O(n + 節の数)。
+-- | 2-SAT。全ての節を満たす割り当てを 1 つ返す。O(n + 節の数)。
 --
 -- > solveTwoSat 2 [(0, True, 1, True), (0, False, 1, False)]   -- x_0 xor x_1: Just [True,False] など
 -- > solveTwoSat 1 [(0, True, 0, True)]                         -- x_0 を真に固定: Just [True]
 --
 -- 「@x_i@ なら @x_j@」は @(i, False, j, True)@。リテラル @x_i == f@ を頂点にして、節 @a ∨ b@ を
 -- 辺 @¬a → b@ と @¬b → a@ にし、'strongComponentIds' で解く。
-solveTwoSat :: Int -> [(Int, Bool, Int, Bool)] -> Maybe (U.Vector Bool)
+solveTwoSat ::
+  -- | @n@: 変数の数 (変数は @x_0 .. x_{n-1}@)
+  Int ->
+  -- | 節 @(i, f, j, g)@ の並び。各節は「@x_i == f@ または @x_j == g@」。範囲外の変数は 'error'
+  [(Int, Bool, Int, Bool)] ->
+  -- | 変数ごとの値 (@i@ 番目が @x_i@)。満たせなければ 'Nothing'
+  Maybe (U.Vector Bool)
 solveTwoSat n clauses
   | any (\(i, _, j, _) -> i < 0 || i >= n || j < 0 || j >= n) clauses = error "Atc.Graph.solveTwoSat: 範囲外の変数"
   | U.any (\i -> cid U.! lit i True == cid U.! lit i False) (U.enumFromN 0 n) = Nothing
@@ -886,19 +1063,27 @@ solveTwoSat n clauses
 bridgeComponentIds :: (GraphKind g) => g -> GraphRet g (Int, U.Vector Int)
 bridgeComponentIds g = primGraph g bridgeComponentIdsC
 
+-- | 'bridgeComponentIds' の本体。橋でない辺だけで 'componentIdsWithC' する。
 bridgeComponentIdsC :: AtcGraph -> (Int, U.Vector Int)
 bridgeComponentIdsC g0 = componentIdsWithC (\u v _ -> not (isBridgeArc ll u v)) g
   where
     g = grRequireUndirected "bridgeComponentIds" g0
     ll = grLowlink g
 
--- | 成分番号 @(成分の数, 元の番号 → 成分の番号)@ から、成分ごとの部分グラフを作る。
--- 返り値は 'splitComponents' と同じ形。番号は 0 以上・成分の数未満で、
--- 頂点数と長さが違えば 'error'。番号は自分で振ったものでもよい。O(n + m)。
+-- | 成分番号から、成分ごとの部分グラフを作る。O(n + m)。
 {-# INLINE splitByIds #-}
-splitByIds :: (GraphKind g) => (Int, U.Vector Int) -> g -> GraphRet g (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
+splitByIds ::
+  (GraphKind g) =>
+  -- | @ids@: 成分番号 @(成分の数, 元の番号 → 成分の番号)@。番号は 0 以上・成分の数未満で、
+  -- 頂点数と長さが違えば 'error'。番号は自分で振ったものでもよい
+  (Int, U.Vector Int) ->
+  -- | グラフ
+  g ->
+  -- | 'splitComponents' と同じ形 (節の説明を参照)
+  GraphRet g (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
 splitByIds ids g = primGraph g (splitByIdsC ids)
 
+-- | 'splitByIds' の本体。
 splitByIdsC :: (Int, U.Vector Int) -> AtcGraph -> (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
 splitByIdsC ids g0 = (grBuildParts g verts arcComp, loc)
   where
@@ -925,6 +1110,7 @@ splitByIdsC ids g0 = (grBuildParts g verts arcComp, loc)
 splitComponents :: (GraphKind g) => g -> GraphRet g (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
 splitComponents g = primGraph g splitComponentsC
 
+-- | 'splitComponents' の本体。
 splitComponentsC :: AtcGraph -> (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
 splitComponentsC g = splitByIdsC (componentIdsC g) g
 
@@ -933,6 +1119,7 @@ splitComponentsC g = splitByIdsC (componentIdsC g) g
 splitStrongComponents :: (GraphKind g) => g -> GraphRet g (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
 splitStrongComponents g = primGraph g splitStrongComponentsC
 
+-- | 'splitStrongComponents' の本体。
 splitStrongComponentsC :: AtcGraph -> (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
 splitStrongComponentsC g = splitByIdsC (strongComponentIdsC g) g
 
@@ -941,6 +1128,7 @@ splitStrongComponentsC g = splitByIdsC (strongComponentIdsC g) g
 splitBridgeComponents :: (GraphKind g) => g -> GraphRet g (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
 splitBridgeComponents g = primGraph g splitBridgeComponentsC
 
+-- | 'splitBridgeComponents' の本体。
 splitBridgeComponentsC :: AtcGraph -> (V.Vector (AtcGraph, U.Vector Int), U.Vector (Int, Int))
 splitBridgeComponentsC g0 = splitByIdsC (bridgeComponentIdsC g) g
   where
@@ -957,6 +1145,7 @@ splitBridgeComponentsC g0 = splitByIdsC (bridgeComponentIdsC g) g
 splitBiconnectedComponents :: (GraphKind g) => g -> GraphRet g (V.Vector (AtcGraph, U.Vector Int), V.Vector [(Int, Int)])
 splitBiconnectedComponents g = primGraph g splitBiconnectedComponentsC
 
+-- | 'splitBiconnectedComponents' の本体。
 splitBiconnectedComponentsC :: AtcGraph -> (V.Vector (AtcGraph, U.Vector Int), V.Vector [(Int, Int)])
 splitBiconnectedComponentsC g0 = (grBuildParts g verts arcComp, loc)
   where
@@ -980,6 +1169,7 @@ splitBiconnectedComponentsC g0 = (grBuildParts g verts arcComp, loc)
 blockCutTree :: (GraphKind g) => g -> GraphRet g g
 blockCutTree g = primGraphNew g blockCutTreeC
 
+-- | 'blockCutTree' の本体。
 blockCutTreeC :: AtcGraph -> AtcGraph
 blockCutTreeC g0 = buildCSR Undirected (n + V.length verts) (bothWays es)
   where
@@ -1000,6 +1190,7 @@ blockCutTreeC g0 = buildCSR Undirected (n + V.length verts) (bothWays es)
 bridgeEdges :: (GraphKind g) => g -> GraphRet g ([(Int, Int)])
 bridgeEdges g = primGraph g bridgeEdgesC
 
+-- | 'bridgeEdges' の本体。
 bridgeEdgesC :: AtcGraph -> [(Int, Int)]
 bridgeEdgesC g0 = U.toList (U.modify Intro.sort (U.map edge (U.filter isBridge (U.enumFromN 0 (numVertices g)))))
   where
@@ -1014,6 +1205,7 @@ bridgeEdgesC g0 = U.toList (U.modify Intro.sort (U.map edge (U.filter isBridge (
 articulationPoints :: (GraphKind g) => g -> GraphRet g ([Int])
 articulationPoints g = primGraph g articulationPointsC
 
+-- | 'articulationPoints' の本体。
 articulationPointsC :: AtcGraph -> [Int]
 articulationPointsC g0 = U.toList (U.findIndices (>= 2) score)
   where
@@ -1032,14 +1224,22 @@ articulationPointsC g0 = U.toList (U.findIndices (>= 2) score)
             else when (U.unsafeIndex low c >= U.unsafeIndex ordv p) $ UM.unsafeWrite sc p 2
       pure sc
 
--- | 成分を 1 頂点に縮める。@ids@ は成分番号 @(成分の数, 元の番号 → 成分の番号)@
--- ('componentIds' / 'strongComponentIds' / 'bridgeComponentIds' など)。
+-- | 成分を 1 頂点に縮める。
 -- 成分をまたぐ辺だけを (重み付きのまま、多重辺もそのまま) 残す。多重辺は 'simplifyGraph' で除ける。
--- 頂点数と長さが違えば 'error'。O(n + m)。
+-- O(n + m)。
 {-# INLINE condense #-}
-condense :: (GraphKind g) => (Int, U.Vector Int) -> g -> GraphRet g g
+condense ::
+  (GraphKind g) =>
+  -- | @ids@: 成分番号 @(成分の数, 元の番号 → 成分の番号)@
+  -- ('componentIds' / 'strongComponentIds' / 'bridgeComponentIds' など)。頂点数と長さが違えば 'error'
+  (Int, U.Vector Int) ->
+  -- | グラフ
+  g ->
+  -- | 縮めたグラフ (頂点 @c@ が成分 @c@。向きは元と同じ)
+  GraphRet g g
 condense ids g = primGraphNew g (condenseC ids)
 
+-- | 'condense' の本体。
 condenseC :: (Int, U.Vector Int) -> AtcGraph -> AtcGraph
 condenseC ids g0 = buildCSR (graphDirection g) k (U.filter (\(a, b, _) -> a /= b) es)
   where
@@ -1053,6 +1253,7 @@ condenseC ids g0 = buildCSR (graphDirection g) k (U.filter (\(a, b, _) -> a /= b
 simplifyGraph :: (GraphKind g) => g -> GraphRet g g
 simplifyGraph g = primGraphNew g simplifyGraphC
 
+-- | 'simplifyGraph' の本体。
 simplifyGraphC :: AtcGraph -> AtcGraph
 simplifyGraphC g@(AtcGraph n _ tgt wt dir) = buildCSR dir n (U.ifilter keep sorted)
   where
@@ -1080,6 +1281,7 @@ data Lowlink = Lowlink
 dfsLowlink :: (GraphKind g) => g -> GraphRet g Lowlink
 dfsLowlink g = primGraph g dfsLowlinkC
 
+-- | 'dfsLowlink' の本体。
 dfsLowlinkC :: AtcGraph -> Lowlink
 dfsLowlinkC = grLowlink . grRequireUndirected "dfsLowlink"
 
@@ -1087,14 +1289,22 @@ dfsLowlinkC = grLowlink . grRequireUndirected "dfsLowlink"
 --
 -- DFS 木で深い方 d と浅い方 a について、木の辺 a - d で、d の下から a 以上へ戻れないとき
 -- (このとき a - d の辺は 1 本だけ)。
-isBridgeArc :: Lowlink -> Int -> Int -> Bool
+isBridgeArc ::
+  -- | 'dfsLowlink' の結果
+  Lowlink ->
+  -- | @u@: 辺の端点
+  Int ->
+  -- | @v@: 辺のもう一方の端点
+  Int ->
+  -- | 辺 @u - v@ が橋なら真 (自己ループは偽)
+  Bool
 isBridgeArc (Lowlink ordv low par _ _) u v = u /= v && par U.! d == a && low U.! d > ordv U.! a
   where
     (d, a) = if ordv U.! u > ordv U.! v then (u, v) else (v, u)
 
 -- 以下は内部用。
 
--- 各辺の出発点。
+-- | 各辺の出発点。
 grArcSources :: AtcGraph -> U.Vector Int
 grArcSources (AtcGraph n off _ _ _) = U.create $ do
   out <- UM.unsafeNew (U.last off)
@@ -1103,20 +1313,20 @@ grArcSources (AtcGraph n off _ _ _) = U.create $ do
     UM.set (UM.unsafeSlice s (U.unsafeIndex off (u + 1) - s) out) u
   pure out
 
--- 無向グラフでなければ止める。第 1 引数はエラーに出す名前。
+-- | 無向グラフでなければ止める。第 1 引数はエラーに出す名前。
 grRequireUndirected :: String -> AtcGraph -> AtcGraph
 grRequireUndirected name g
   | graphDirection g == Undirected = g
   | otherwise = error ("Atc.Graph." ++ name ++ ": 無向グラフ用です (undirectedGraph などで作る)")
 
--- 成分番号の形を確かめる。
+-- | 成分番号の形を確かめる (第 1 引数はエラーに出す名前)。
 grCheckIds :: String -> (Int, U.Vector Int) -> AtcGraph -> AtcGraph
 grCheckIds name (k, cid) g
   | U.length cid /= numVertices g = error ("Atc.Graph." ++ name ++ ": 成分番号の長さが頂点数と違います")
   | U.any (\c -> c < 0 || k <= c) cid = error ("Atc.Graph." ++ name ++ ": 成分番号が 0 以上・成分の数未満ではありません")
   | otherwise = g
 
--- 頂点ごとの代表から、代表を初めて見た順に 0, 1 .. と番号を振る。代表は 0 以上 n 未満。
+-- | 頂点ごとの代表から、代表を初めて見た順に 0, 1 .. と番号を振る。代表は 0 以上 n 未満。
 grNumberRoots :: U.Vector Int -> (Int, U.Vector Int)
 grNumberRoots rs = runST $ do
   idOf <- UM.replicate n (-1)
@@ -1132,7 +1342,7 @@ grNumberRoots rs = runST $ do
   where
     n = U.length rs
 
--- 二重頂点連結成分の、成分ごとの頂点 (昇順。成分は辞書順) と、辺ごとの成分。
+-- | 二重頂点連結成分の、成分ごとの頂点 (昇順。成分は辞書順) と、辺ごとの成分。
 --
 -- 2 つの成分が共有する頂点は高々 1 つなので、昇順に並べた頂点の先頭 2 つ (1 頂点の成分は
 -- 先頭と -1) で辞書順が決まる。1 頂点の成分の頂点は、ほかのどの成分にも入らない。
@@ -1155,7 +1365,7 @@ grBiconnected g@(AtcGraph _ _ tgt _ _) = (verts, arcComp)
         (grArcSources g)
         tgt
 
--- 成分ごとの頂点 (昇順) と、辺ごとの成分 (-1 なら落とす) から部分グラフを作る。
+-- | 成分ごとの頂点 (昇順) と、辺ごとの成分 (-1 なら落とす) から部分グラフを作る。
 --
 -- 全ての成分の CSR を 1 本ずつの大きな配列に書き、成分ごとに切り出す。成分の中の辺は
 -- 元の順 (出発点の昇順) に並べるので、そのまま CSR になる。元の番号 → 部分の番号は、
@@ -1216,7 +1426,7 @@ grBuildParts g@(AtcGraph n _ tgt wt _) verts arcComp = runST $ do
     -- 成分 c の off は長さ (頂点数 + 1)。
     voff = U.scanl' (+) 0 (U.convert (V.map (\vs -> U.length vs + 1) verts))
 
--- 'dfsLowlink' の本体 (向きは確かめない)。
+-- | 'dfsLowlink' の本体 (向きは確かめない)。
 --
 -- 再帰の代わりに、呼び出しのスタック cs と頂点ごとの次に見る辺 it を持つ。
 -- 親へ戻る辺は 1 本だけ飛ばす (残りの多重辺は後退辺として数える)。
@@ -1326,19 +1536,35 @@ grLowlink (AtcGraph n off tgt _ _) = runST $ do
 --
 -- 連結な木 (無向で辺 n - 1 本) を前提にする。
 
--- | 根 @root@ からの親 (根は @-1@) と深さ (辺の本数)。O(n)。
+-- | 根からの親と深さ。O(n)。
 {-# INLINE treeParentDepth #-}
-treeParentDepth :: (GraphKind g) => g -> Int -> GraphRet g (U.Vector Int, U.Vector Int)
+treeParentDepth ::
+  (GraphKind g) =>
+  -- | 木
+  g ->
+  -- | @root@: 根
+  Int ->
+  -- | @(親, 深さ)@。親は根で @-1@、深さは根からの辺の本数
+  GraphRet g (U.Vector Int, U.Vector Int)
 treeParentDepth g x = primGraph g (\c -> treeParentDepthC c x)
 
+-- | 'treeParentDepth' の本体。
 treeParentDepthC :: AtcGraph -> Int -> (U.Vector Int, U.Vector Int)
 treeParentDepthC g root = let (d, p) = bfsDistPrev g [root] in (p, d)
 
--- | 根 @root@ からの重み付きの距離。O(n)。
+-- | 根からの重み付きの距離。O(n)。
 {-# INLINE treeDist #-}
-treeDist :: (GraphKind g) => g -> Int -> GraphRet g (U.Vector Int)
+treeDist ::
+  (GraphKind g) =>
+  -- | 木
+  g ->
+  -- | @root@: 根
+  Int ->
+  -- | 頂点ごとの @root@ からの重みの和
+  GraphRet g (U.Vector Int)
 treeDist g x = primGraph g (\c -> treeDistC c x)
 
+-- | 'treeDist' の本体。
 treeDistC :: AtcGraph -> Int -> U.Vector Int
 treeDistC g root = runST $ do
   dist <- UM.replicate n 0
@@ -1369,6 +1595,7 @@ treeDistC g root = runST $ do
 treeDiameter :: (GraphKind g) => g -> GraphRet g (Int, Int, Int)
 treeDiameter g = primGraph g treeDiameterC
 
+-- | 'treeDiameter' の本体 (2 回 'treeDist' する)。
 treeDiameterC :: AtcGraph -> (Int, Int, Int)
 treeDiameterC g = (dv U.! v, u, v)
   where

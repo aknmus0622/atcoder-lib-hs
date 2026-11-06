@@ -17,12 +17,8 @@
 -- == 全方位木 DP
 --
 -- 「各頂点を根にしたときの木 DP の値」を全頂点まとめて O(n) で求める ('rerootDP')。
--- 部分木の値を @b@、子から集めた値を @a@ として、次の 3 つを渡す。
---
--- * @(merge, e)@: 子から集めた値をまとめる結合的な演算と、その単位元 (子がないとき)。
--- * @up parent child w b@: 子 @child@ の部分木の値 @b@ を、辺 @parent - child@ (重み @w@) を
---   通して親から見た値 @a@ にする。
--- * @finish v a@: 子から集めた値 @a@ から、頂点 @v@ の部分木の値 @b@ を作る。
+-- 部分木の値を @b@、子から集めた値を @a@ とし、@merge@ / @e@ / @up@ / @finish@ の 4 つを渡す
+-- (それぞれの意味は 'rerootDP' の引数の説明)。
 --
 -- > -- 各頂点から最も遠い頂点までの距離 (重み付き)
 -- > rerootDP max 0 (\_ _ w d -> d + w) (\_ a -> a) g
@@ -47,21 +43,33 @@ import qualified Data.Vector.Unboxed.Mutable as UM
 -- ---------------------------------------------------------------------
 -- 根付き木の形
 
--- | 根付きの森の形: 訪れた順 (BFS 順。親は子より前)、親 (根は -1)、
--- 深さ (辺の本数)、根からの重みの和、親へ向かう辺の重み。
+-- | 根付きの森の形。各配列は頂点番号で引く (長さ n)。
 data RootedTree = RootedTree
-  { rtOrder :: !(U.Vector Int)
-  , rtParent :: !(U.Vector Int)
-  , rtDepth :: !(U.Vector Int)
-  , rtDist :: !(U.Vector Int)
-  , rtParentWeight :: !(U.Vector Int)
+  { -- | 訪れた順 (BFS 順。親は子より前)
+    rtOrder :: !(U.Vector Int)
+  , -- | 親 (根は -1)
+    rtParent :: !(U.Vector Int)
+  , -- | 深さ (根からの辺の本数)
+    rtDepth :: !(U.Vector Int)
+  , -- | 根からの重みの和
+    rtDist :: !(U.Vector Int)
+  , -- | 親へ向かう辺の重み (根は 0)
+    rtParentWeight :: !(U.Vector Int)
   }
 
 -- | @root@ を最初の根にして、残りの成分は番号が最小の頂点を根にした BFS。O(n + m)。
 -- 無向グラフ用。閉路があっても 'error' にはしない (BFS 木を使う)。
-rootTree :: (GraphKind g) => g -> Int -> GraphRet g RootedTree
+rootTree ::
+  (GraphKind g) =>
+  -- | 無向グラフ (森でもよい)
+  g ->
+  -- | @root@: 最初の根
+  Int ->
+  -- | 根付きの形
+  GraphRet g RootedTree
 rootTree g root = primGraph g (\c -> rootTreeC c root)
 
+-- | 'rootTree' の本体。
 rootTreeC :: AtcGraph -> Int -> RootedTree
 rootTreeC g root
   | graphDirection g /= Undirected = error "Atc.Graph.Tree: 無向グラフ用です (undirectedGraph などで作る)"
@@ -112,14 +120,27 @@ rootTreeC g root
 -- ---------------------------------------------------------------------
 -- LCA
 
--- | LCA の表: 根付きの形と、2^k 個上の祖先の表 (越えれば -1)。
-data LCA = LCA !RootedTree !(V.Vector (U.Vector Int))
+-- | LCA の表 ('buildLCA' で作る)。
+data LCA
+  = LCA
+      -- | 根付きの形
+      !RootedTree
+      -- | 第 k 段は各頂点の 2^k 個上の祖先 (越えれば -1)
+      !(V.Vector (U.Vector Int))
 
 -- | 頂点 @root@ を根にして LCA の表を作る (森なら他の成分は最小の頂点が根)。
 -- 無向グラフ用。O(n log n)。
-buildLCA :: (GraphKind g) => g -> Int -> GraphRet g LCA
+buildLCA ::
+  (GraphKind g) =>
+  -- | 無向グラフ (森でもよい)
+  g ->
+  -- | @root@: 根
+  Int ->
+  -- | LCA の表
+  GraphRet g LCA
 buildLCA g root = primGraph g (\c -> buildLCAC c root)
 
+-- | 'buildLCA' の本体。
 buildLCAC :: AtcGraph -> Int -> LCA
 buildLCAC g root = LCA rt (V.fromList (take levels (iterate double par)))
   where
@@ -130,7 +151,7 @@ buildLCAC g root = LCA rt (V.fromList (take levels (iterate double par)))
     double up = U.map (\v -> if v == -1 then -1 else U.unsafeIndex up v) up
     bitLen x = if x <= 1 then 1 else 1 + bitLen (x `shiftR` 1)
 
--- 範囲を確かめる。
+-- | 頂点が範囲内か確かめる (範囲外なら関数名付きで 'error')。
 lcaCheck :: String -> Int -> LCA -> ()
 lcaCheck name v (LCA rt _)
   | v < 0 || v >= U.length (rtParent rt) = error ("Atc.Graph.Tree." ++ name ++ ": 頂点 " ++ show v ++ " が範囲外")
@@ -138,11 +159,23 @@ lcaCheck name v (LCA rt _)
 {-# INLINE lcaCheck #-}
 
 -- | 深さ (根からの辺の本数)。O(1)。
-depthLCA :: Int -> LCA -> Int
+depthLCA ::
+  -- | @v@: 頂点
+  Int ->
+  -- | LCA の表
+  LCA ->
+  -- | @v@ の深さ
+  Int
 depthLCA v t@(LCA rt _) = lcaCheck "depthLCA" v t `seq` U.unsafeIndex (rtDepth rt) v
 
 -- | 親。根なら -1。O(1)。
-parentLCA :: Int -> LCA -> Int
+parentLCA ::
+  -- | @v@: 頂点
+  Int ->
+  -- | LCA の表
+  LCA ->
+  -- | @v@ の親 (根なら -1)
+  Int
 parentLCA v t@(LCA rt _) = lcaCheck "parentLCA" v t `seq` U.unsafeIndex (rtParent rt) v
 
 -- | 根付きの形 ('rtOrder' などで中身を見る)。
@@ -150,7 +183,15 @@ rootedLCA :: LCA -> RootedTree
 rootedLCA (LCA rt _) = rt
 
 -- | @v@ から @k@ 回親に上った頂点。根を越えれば -1。@k = 0@ なら @v@。O(log n)。
-ancestorLCA :: Int -> Int -> LCA -> Int
+ancestorLCA ::
+  -- | @k@: 上る回数 (0 以上)
+  Int ->
+  -- | @v@: 始める頂点
+  Int ->
+  -- | LCA の表
+  LCA ->
+  -- | @k@ 個上の祖先 (根を越えれば -1)
+  Int
 ancestorLCA k v0 t@(LCA _ ups)
   | k < 0 = error "Atc.Graph.Tree.ancestorLCA: 負の回数"
   | k >= 2 ^ V.length ups = lcaCheck "ancestorLCA" v0 t `seq` (-1)
@@ -162,7 +203,15 @@ ancestorLCA k v0 t@(LCA _ ups)
       | otherwise = go (i + 1) v
 
 -- | 最小共通祖先。違う成分 (森) なら -1。O(log n)。
-lcaOf :: Int -> Int -> LCA -> Int
+lcaOf ::
+  -- | @u@: 頂点
+  Int ->
+  -- | @v@: 頂点
+  Int ->
+  -- | LCA の表
+  LCA ->
+  -- | @u@ と @v@ の最小共通祖先 (違う成分なら -1)
+  Int
 lcaOf u0 v0 t@(LCA rt ups) = lcaCheck "lcaOf" u0 t `seq` lcaCheck "lcaOf" v0 t `seq` result
   where
     dep = rtDepth rt
@@ -184,7 +233,15 @@ lcaOf u0 v0 t@(LCA rt ups) = lcaCheck "lcaOf" u0 t `seq` lcaCheck "lcaOf" v0 t `
            in if px == U.unsafeIndex (rtParent rt) y then px else -1
 
 -- | @u@ と @v@ の間の辺の本数。違う成分なら -1。O(log n)。
-distanceLCA :: Int -> Int -> LCA -> Int
+distanceLCA ::
+  -- | @u@: 頂点
+  Int ->
+  -- | @v@: 頂点
+  Int ->
+  -- | LCA の表
+  LCA ->
+  -- | 辺の本数 (違う成分なら -1)
+  Int
 distanceLCA u v t@(LCA rt _) = case lcaOf u v t of
   -1 -> -1
   w -> U.unsafeIndex dep u + U.unsafeIndex dep v - 2 * U.unsafeIndex dep w
@@ -192,7 +249,15 @@ distanceLCA u v t@(LCA rt _) = case lcaOf u v t of
     dep = rtDepth rt
 
 -- | @u@ と @v@ の間の重みの和。違う成分なら 'Nothing'。O(log n)。
-weightedDistanceLCA :: Int -> Int -> LCA -> Maybe Int
+weightedDistanceLCA ::
+  -- | @u@: 頂点
+  Int ->
+  -- | @v@: 頂点
+  Int ->
+  -- | LCA の表
+  LCA ->
+  -- | 重みの和 (違う成分なら 'Nothing')
+  Maybe Int
 weightedDistanceLCA u v t@(LCA rt _) = case lcaOf u v t of
   -1 -> Nothing
   w -> Just (U.unsafeIndex d u + U.unsafeIndex d v - 2 * U.unsafeIndex d w)
@@ -200,7 +265,15 @@ weightedDistanceLCA u v t@(LCA rt _) = case lcaOf u v t of
     d = rtDist rt
 
 -- | @u@ から @v@ への道の頂点 (両端を含む)。違う成分なら空。O(道の長さ + log n)。
-pathLCA :: Int -> Int -> LCA -> [Int]
+pathLCA ::
+  -- | @u@: 始点
+  Int ->
+  -- | @v@: 終点
+  Int ->
+  -- | LCA の表
+  LCA ->
+  -- | @u@ から @v@ への道の頂点 (両端を含む。違う成分なら空)
+  [Int]
 pathLCA u v t@(LCA rt _) = case lcaOf u v t of
   -1 -> []
   w -> upTo u w ++ reverse (init' (upTo v w))
@@ -212,18 +285,26 @@ pathLCA u v t@(LCA rt _) = case lcaOf u v t of
 -- ---------------------------------------------------------------------
 -- 全方位木 DP
 
--- | 各頂点を根にしたときの木 DP の値。引数はモジュールの説明を参照。
--- 森なら成分ごとに計算する。無向グラフ用。O(n) 回 @merge@ / @up@ / @finish@ を呼ぶ。
+-- | 各頂点を根にしたときの木 DP の値。森なら成分ごとに計算する。無向グラフ用。
+-- O(n) 回 @merge@ / @up@ / @finish@ を呼ぶ。
 rerootDP ::
   (GraphKind g) =>
+  -- | @merge a1 a2@: 子から集めた値 @a@ どうしをまとめる結合的な演算 (可換でなくてよい)
   (a -> a -> a) ->
+  -- | @e@: @merge@ の単位元 (子がないときの値)
   a ->
+  -- | @up v c w b@: 隣の頂点 @c@ 側の部分木の値 @b@ を、辺 @v - c@ (重み @w@) を通して
+  -- @v@ から見た値 @a@ にする。@v@ は見ている側 (今の根に近い側) で、元の木の親とは限らない
   (Int -> Int -> Int -> b -> a) ->
+  -- | @finish v a@: 子から集めた値 @a@ から、頂点 @v@ の部分木の値 @b@ を作る
   (Int -> a -> b) ->
+  -- | 無向グラフ (木または森)
   g ->
+  -- | 頂点 @v@ を根にしたときの値 (頂点番号で引く)
   GraphRet g (V.Vector b)
 rerootDP merge e up finish g = primGraph g (rerootDPC merge e up finish)
 
+-- | 'rerootDP' の本体。
 rerootDPC :: (a -> a -> a) -> a -> (Int -> Int -> Int -> b -> a) -> (Int -> a -> b) -> AtcGraph -> V.Vector b
 rerootDPC merge e up finish g = runST $ do
   -- 1. 葉から: down v = v を根とする部分木の値。

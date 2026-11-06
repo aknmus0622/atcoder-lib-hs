@@ -33,18 +33,34 @@ import qualified Data.Vector.Generic as G
 import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector.Unboxed.Mutable as MU
 
--- | 予算 @b@ の範囲で、@pop top x@ の間 pop しながら全部 push する。
--- 残ったスタックを下から順に返す。
+-- | 予算の範囲で pop しながら全部 push し、残ったスタックを返す。
 {-# INLINE monoStack #-}
-monoStack :: (G.Vector v a) => Int -> (a -> a -> Bool) -> v a -> v a
+monoStack ::
+  (G.Vector v a) =>
+  -- | @b@: pop してよい回数の合計 (予算)。予算の要らない普通の単調スタックは @maxBound@
+  Int ->
+  -- | @pop top x@: スタックの上 @top@ を、これから push する @x@ の前に pop するか
+  (a -> a -> Bool) ->
+  -- | @xs@: 左から順に push する列
+  v a ->
+  -- | 残ったスタック (下から順)
+  v a
 monoStack b pop xs = G.generate (U.length idx) (G.unsafeIndex xs . U.unsafeIndex idx)
   where
     idx = fst (runStack b pop xs)
 
--- | 'monoStack' と同じ動きで、各 @i@ について「@xs ! i@ を push する直前の
--- スタックの上の添字」を返す (空なら -1)。
+-- | 'monoStack' と同じ動きで、各要素を push する直前のスタックの上の添字を返す。
 {-# INLINE monoStackTops #-}
-monoStackTops :: (G.Vector v a) => Int -> (a -> a -> Bool) -> v a -> U.Vector Int
+monoStackTops ::
+  (G.Vector v a) =>
+  -- | @b@: pop してよい回数の合計 (予算)。予算の要らない普通の単調スタックは @maxBound@
+  Int ->
+  -- | @pop top x@: スタックの上 @top@ を、これから push する @x@ の前に pop するか
+  (a -> a -> Bool) ->
+  -- | @xs@: 左から順に push する列
+  v a ->
+  -- | 第 @i@ 要素は @xs ! i@ を push する直前のスタックの上の添字 (空なら -1)
+  U.Vector Int
 monoStackTops b pop xs = snd (runStack b pop xs)
 
 -- | スタックには添字を積む。返すのは (残った添字, 各 push 直前の上)。

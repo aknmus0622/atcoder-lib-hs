@@ -22,8 +22,11 @@ import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector.Unboxed.Mutable as UM
 import Data.Bits (countLeadingZeros, finiteBitSize, shiftL, shiftR, (.&.))
 
--- | 長さ n の Fenwick Tree。中身は 1 始まりの配列 (@i@ 番目は @(i - lowbit i, i]@ の和)。
-newtype Fenwick m a = Fenwick (UM.MVector (PrimState m) a)
+-- | 長さ n の Fenwick Tree。
+newtype Fenwick m a
+  = Fenwick
+      -- | 1 始まりの配列 (長さ n + 1。@i@ 番目は @(i - lowbit i, i]@ の和)
+      (UM.MVector (PrimState m) a)
 
 -- | 長さ @n@ で、全て 0 の Fenwick Tree。O(n)。
 newFT :: (PrimMonad m, U.Unbox a, Num a) => Int -> m (Fenwick m a)
@@ -55,7 +58,16 @@ lengthFT (Fenwick t) = UM.length t - 1
 {-# INLINE lengthFT #-}
 
 -- | @a_i += x@。範囲外は 'error'。O(log n)。
-addFT :: (PrimMonad m, U.Unbox a, Num a) => Int -> a -> Fenwick m a -> m ()
+addFT ::
+  (PrimMonad m, U.Unbox a, Num a) =>
+  -- | @i@: 添字
+  Int ->
+  -- | @x@: 足す値
+  a ->
+  -- | 書き換える Fenwick Tree
+  Fenwick m a ->
+  -- | なし
+  m ()
 addFT i0 x f@(Fenwick t)
   | i0 < 0 || i0 >= n = error ("Atc.Fenwick.addFT: 範囲外の添字 " ++ show i0)
   | otherwise = go (i0 + 1)
@@ -65,7 +77,14 @@ addFT i0 x f@(Fenwick t)
 {-# INLINE addFT #-}
 
 -- | @a_0 + .. + a_{r-1}@。@0 <= r <= n@。O(log n)。
-prefixSumFT :: (PrimMonad m, U.Unbox a, Num a) => Int -> Fenwick m a -> m a
+prefixSumFT ::
+  (PrimMonad m, U.Unbox a, Num a) =>
+  -- | @r@: 先頭から何個の和か (@0 <= r <= n@)
+  Int ->
+  -- | Fenwick Tree
+  Fenwick m a ->
+  -- | @a_0 + .. + a_{r-1}@
+  m a
 prefixSumFT r0 f@(Fenwick t)
   | r0 < 0 || r0 > lengthFT f = error ("Atc.Fenwick.prefixSumFT: 範囲外 " ++ show r0)
   | otherwise = go r0 0
@@ -74,22 +93,45 @@ prefixSumFT r0 f@(Fenwick t)
 {-# INLINE prefixSumFT #-}
 
 -- | @[l, r)@ の和。@0 <= l <= r <= n@。O(log n)。
-sumFT :: (PrimMonad m, U.Unbox a, Num a) => Int -> Int -> Fenwick m a -> m a
+sumFT ::
+  (PrimMonad m, U.Unbox a, Num a) =>
+  -- | @l@: 左端 (含む)
+  Int ->
+  -- | @r@: 右端 (含まない)
+  Int ->
+  -- | Fenwick Tree
+  Fenwick m a ->
+  -- | @a_l + .. + a_{r-1}@
+  m a
 sumFT l r f
   | l > r = error ("Atc.Fenwick.sumFT: l > r (" ++ show l ++ ", " ++ show r ++ ")")
   | otherwise = (-) <$> prefixSumFT r f <*> prefixSumFT l f
 {-# INLINE sumFT #-}
 
 -- | 1 点の値 @a_i@。O(log n)。
-getFT :: (PrimMonad m, U.Unbox a, Num a) => Int -> Fenwick m a -> m a
+getFT ::
+  (PrimMonad m, U.Unbox a, Num a) =>
+  -- | @i@: 添字
+  Int ->
+  -- | Fenwick Tree
+  Fenwick m a ->
+  -- | @a_i@
+  m a
 getFT i = sumFT i (i + 1)
 {-# INLINE getFT #-}
 
--- | @p (a_0 + .. + a_{r-1})@ が真になる最大の @r@。@p 0@ が真で、@r@ を増やすと
--- 真から偽に 1 回だけ変わること (値が非負で @p = (<= k)@ など)。O(log n)。
+-- | 先頭からの和が条件を満たす最長の長さ。O(log n)。
 --
 -- > maxRightFT (< k) t   -- 先頭からの和が初めて k 以上になる位置 (k 番目の要素を探す)
-maxRightFT :: (PrimMonad m, U.Unbox a, Num a) => (a -> Bool) -> Fenwick m a -> m Int
+maxRightFT ::
+  (PrimMonad m, U.Unbox a, Num a) =>
+  -- | @p s@: 先頭からの和 @s@ が条件を満たすか。@p 0@ が真で、@r@ を増やすと
+  -- @p (a_0 + .. + a_{r-1})@ が真から偽に 1 回だけ変わること (値が非負で @p = (<= k)@ など)
+  (a -> Bool) ->
+  -- | Fenwick Tree
+  Fenwick m a ->
+  -- | @p (a_0 + .. + a_{r-1})@ が真になる最大の @r@
+  m Int
 maxRightFT p f@(Fenwick t) = go top 0 0
   where
     n = lengthFT f

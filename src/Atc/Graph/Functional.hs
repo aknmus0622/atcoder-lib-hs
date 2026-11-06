@@ -61,25 +61,52 @@ nextVerticesFG g = case filter (\v -> outDegree g v /= 1) [0 .. n - 1] of
 -- ---------------------------------------------------------------------
 -- K 回先の頂点
 
--- | @k <= maxK@ の 'jumpFG' に使える表を作る。O(n log maxK)。
-jumpTableFG :: AtcGraph -> Int -> JumpTable U.Vector ()
+-- | 'jumpFG' に使える表を作る。O(n log maxK)。
+jumpTableFG ::
+  -- | Functional Graph
+  AtcGraph ->
+  -- | @maxK@: 問い合わせる回数の最大
+  Int ->
+  -- | @k <= maxK@ の 'jumpFG' に使える表
+  JumpTable U.Vector ()
 jumpTableFG g maxK = buildJT (\_ _ -> ()) maxK (nextVerticesFG g) (U.replicate (numVertices g) ())
 
--- | 辺の重みを @merge@ で合成する表を作る。'foldJT' / 'climbJT' で経路上の値を求める。
+-- | 辺の重みを合成する表を作る。'foldJT' / 'climbJT' で経路上の値を求める。
 -- O(n log maxK)。
-weightedJumpTableFG :: (Int -> Int -> Int) -> AtcGraph -> Int -> JumpTable U.Vector Int
+weightedJumpTableFG ::
+  -- | @merge a b@: 経路の前半の重み @a@ と後半の重み @b@ を合成する結合的な演算
+  -- (可換でなくてよい)
+  (Int -> Int -> Int) ->
+  -- | Functional Graph (各頂点から出る辺の重みを使う)
+  AtcGraph ->
+  -- | @maxK@: 問い合わせる回数の最大
+  Int ->
+  -- | @k <= maxK@ の問い合わせに使える表
+  JumpTable U.Vector Int
 weightedJumpTableFG merge g maxK =
   buildJT merge maxK (nextVerticesFG g) (U.generate (numVertices g) (U.head . adjacentWeights g))
 
--- | 頂点 @v@ から @k@ 回進んだ頂点。O(log k)。@k@ が表の範囲を超えると 'error'。
-jumpFG :: JumpTable v w -> Int -> Int -> Int
+-- | 表を使って @k@ 回進む。O(log k)。@k@ が表の範囲を超えると 'error'。
+jumpFG ::
+  -- | 'jumpTableFG' などで作った表
+  JumpTable v w ->
+  -- | @v@: 始める頂点
+  Int ->
+  -- | @k@: 進む回数
+  Int ->
+  -- | @v@ から @k@ 回進んだ頂点
+  Int
 jumpFG = jumpJT
 
--- | 頂点 @v@ からの経路 @(path, t, c)@。O(n)。
---
--- @path@ は同じ頂点に戻る直前までの頂点の列で、長さ @t + c@。
--- 先頭の @t@ 個が閉路に入るまでの部分、残りの @c@ 個が閉路。
-rhoFG :: AtcGraph -> Int -> (U.Vector Int, Int, Int)
+-- | 頂点 @v@ からの経路を、閉路に入るまでと閉路に分けて返す。O(n)。
+rhoFG ::
+  -- | Functional Graph
+  AtcGraph ->
+  -- | @v@: 始める頂点
+  Int ->
+  -- | @(path, t, c)@: @path@ は同じ頂点に戻る直前までの頂点の列で、長さ @t + c@。
+  -- 先頭の @t@ 個が閉路に入るまでの部分、残りの @c@ 個が閉路
+  (U.Vector Int, Int, Int)
 rhoFG g v0
   | v0 < 0 || v0 >= n = error ("rhoFG: 頂点が範囲外: " ++ show v0)
   | otherwise = runST $ do
@@ -101,7 +128,15 @@ rhoFG g v0
     n = U.length f
 
 -- | 頂点 @v@ から @k@ 回進んだ頂点。O(n)。@k@ が負なら 'error'。
-walkFG :: AtcGraph -> Int -> Int -> Int
+walkFG ::
+  -- | Functional Graph
+  AtcGraph ->
+  -- | @v@: 始める頂点
+  Int ->
+  -- | @k@: 進む回数 (0 以上。いくら大きくてもよい)
+  Int ->
+  -- | @v@ から @k@ 回進んだ頂点
+  Int
 walkFG g v k
   | k < 0 = error ("walkFG: k が負: " ++ show k)
   | k < t = path U.! k
@@ -173,10 +208,18 @@ reachFG g = U.create $ do
 
 -- | 木の部分を葉から畳み込む。O(n)。
 --
--- 頂点 @v@ の値は @initial v@ から始まり、閉路にない頂点 @u@ の値が確定すると
--- @u@ の行き先の値を @merge (行き先の値) (u の値)@ で更新する。閉路の上の頂点には
--- 流れ込む木の分までが入る。閉路の上の頂点どうしでは畳み込まない。
-foldTreesFG :: (U.Unbox a) => AtcGraph -> (Int -> a) -> (a -> a -> a) -> U.Vector a
+-- 閉路にない頂点 @u@ の値が確定すると、@u@ の行き先の値を @merge@ で更新する。
+-- 閉路の上の頂点どうしでは畳み込まない。
+foldTreesFG ::
+  (U.Unbox a) =>
+  -- | Functional Graph
+  AtcGraph ->
+  -- | @initial v@: 頂点 @v@ の最初の値
+  (Int -> a) ->
+  -- | @merge x y@: 行き先の今の値 @x@ に、流れ込む頂点 @u@ の確定した値 @y@ を合わせる
+  (a -> a -> a) ->
+  -- | 各頂点の値 (頂点番号で引く)。閉路の上の頂点には流れ込む木の分までが入る
+  U.Vector a
 foldTreesFG g initial merge = U.create $ do
   let f = nextVerticesFG g
   dp <- U.thaw (U.generate (numVertices g) initial)

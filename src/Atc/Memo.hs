@@ -40,7 +40,14 @@ import System.IO.Unsafe (unsafePerformIO)
 
 -- | 'memo' の表を選ぶ。'Int' は IntMap、ほかの 'Ord' は Map。
 class MemoKey k where
-  memo :: ((k -> v) -> k -> v) -> k -> v
+  -- | 範囲指定なしでメモ化する。参照は O(log 状態数)。
+  memo ::
+    -- | @f self k@: キー @k@ の値を計算する。再帰呼び出しは @self@ (メモ化された版) で行う
+    ((k -> v) -> k -> v) ->
+    -- | @k@: キー
+    k ->
+    -- | @k@ の値
+    v
 
 instance {-# OVERLAPPING #-} MemoKey Int where
   memo = memoTable IntMapL.empty IntMapL.lookup IntMapL.insert
@@ -48,6 +55,7 @@ instance {-# OVERLAPPING #-} MemoKey Int where
 instance {-# OVERLAPPABLE #-} (Ord k) => MemoKey k where
   memo = memoTable MapL.empty MapL.lookup MapL.insert
 
+-- | 'memo' の本体。@empty@ / @lookupT@ / @insertT@ は表の型 (IntMap / Map) の操作。
 -- 表は IORef に持つ。f が純粋なら外からは普通の関数と区別できない。
 -- インライン展開で表が複製されないよう NOINLINE にする。
 -- 値はサンクのまま先に表に入れてから評価する。評価後は表の中も値になり、
@@ -66,25 +74,53 @@ memoTable empty lookupT insertT f = unsafePerformIO $ do
             evaluate v
   pure go
 
--- | 範囲 @(lo, hi)@ の配列を表にする。必要になった状態だけ計算する。
+-- | 範囲の配列を表にする。必要になった状態だけ計算する。
 {-# NOINLINE memoIx #-}
-memoIx :: (Ix k) => (k, k) -> ((k -> v) -> k -> v) -> k -> v
+memoIx ::
+  (Ix k) =>
+  -- | @(lo, hi)@: キーの範囲 (両端を含む。範囲外のキーで呼ぶと 'error')
+  (k, k) ->
+  -- | @f self k@: キー @k@ の値を計算する。再帰呼び出しは @self@ (メモ化された版) で行う
+  ((k -> v) -> k -> v) ->
+  -- | @k@: キー
+  k ->
+  -- | @k@ の値
+  v
 memoIx bnds f = fst (memoIxTable bnds f)
 
 -- | 'memoIx' と同じだが、全状態を添字の昇順に先に計算する。
 {-# NOINLINE memoIxAsc #-}
-memoIxAsc :: (Ix k) => (k, k) -> ((k -> v) -> k -> v) -> k -> v
+memoIxAsc ::
+  (Ix k) =>
+  -- | @(lo, hi)@: キーの範囲 (両端を含む。範囲内の全状態で計算できること)
+  (k, k) ->
+  -- | @f self k@: キー @k@ の値を計算する。再帰呼び出しは @self@ (メモ化された版) で行う
+  ((k -> v) -> k -> v) ->
+  -- | @k@: キー
+  k ->
+  -- | @k@ の値
+  v
 memoIxAsc bnds f = V.foldl' (\() x -> x `seq` ()) () tbl `seq` go
   where
     (go, tbl) = memoIxTable bnds f
 
 -- | 'memoIx' と同じだが、全状態を添字の降順に先に計算する。
 {-# NOINLINE memoIxDesc #-}
-memoIxDesc :: (Ix k) => (k, k) -> ((k -> v) -> k -> v) -> k -> v
+memoIxDesc ::
+  (Ix k) =>
+  -- | @(lo, hi)@: キーの範囲 (両端を含む。範囲内の全状態で計算できること)
+  (k, k) ->
+  -- | @f self k@: キー @k@ の値を計算する。再帰呼び出しは @self@ (メモ化された版) で行う
+  ((k -> v) -> k -> v) ->
+  -- | @k@: キー
+  k ->
+  -- | @k@ の値
+  v
 memoIxDesc bnds f = V.foldr' (\x () -> x `seq` ()) () tbl `seq` go
   where
     (go, tbl) = memoIxTable bnds f
 
+-- | 'memoIx' / 'memoIxAsc' / 'memoIxDesc' の本体。メモ化した関数と表を返す。
 -- 要素は遅延 (参照されたときに WHNF まで評価され、以後は値)。
 memoIxTable :: (Ix k) => (k, k) -> ((k -> v) -> k -> v) -> (k -> v, V.Vector v)
 memoIxTable bnds f = (go, tbl)

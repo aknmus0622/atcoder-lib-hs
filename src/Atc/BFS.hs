@@ -72,14 +72,20 @@ import Unsafe.Coerce (unsafeCoerce)
 --
 -- 内部ではキーを 0 始まりの添字にして、キューも表も添字で持つ。
 data Space k
-  = Dense !(k, k)
-  | Sparse (forall s. ST s (SparseKeys s k))
+  = -- | 範囲 @(lo, hi)@ の配列
+    Dense !(k, k)
+  | -- | Map で添字を振る (始めるときに作る)
+    Sparse (forall s. ST s (SparseKeys s k))
 
--- Map で振った添字。find は無ければ -1、ensure は無ければ振る。
+-- | Map で振った添字。
 data SparseKeys s k = SparseKeys
-  { sparseFind :: k -> ST s Int,
+  { -- | キーの添字 (無ければ -1)
+    sparseFind :: k -> ST s Int,
+    -- | キーの添字 (無ければ新しく振る)
     sparseEnsure :: k -> ST s Int,
+    -- | 添字からキーを引く
     sparseKeyAt :: Int -> ST s k,
+    -- | 今の割り当てを固めた、キーから添字への関数 (無ければ -1)
     sparseFreeze :: ST s (k -> Int)
   }
 
@@ -96,13 +102,35 @@ dense = Dense
 -- 'sparse' 専用になる ('dense' に渡すと始めた時点でエラー)。リスト ('String')・'Integer'・
 -- Vector は用意してある。自作の型なら @instance BFSKey T@ の 1 行を書く。
 class BFSKey k where
+  -- | 範囲 @(lo, hi)@ に入るキーの個数。
   keySize :: (k, k) -> Int
   keySize _ = error "dense: このキーの型は sparse 専用 (dense は Int / Bool / Char とそのタプル)"
-  keyInRange :: (k, k) -> k -> Bool
+  -- | キーが範囲に入るか。
+  keyInRange ::
+    -- | 範囲 @(lo, hi)@
+    (k, k) ->
+    -- | キー
+    k ->
+    -- | 範囲に入れば 'True'
+    Bool
   keyInRange _ _ = False
-  keyIndex :: (k, k) -> k -> Int
+  -- | キーの添字。
+  keyIndex ::
+    -- | 範囲 @(lo, hi)@
+    (k, k) ->
+    -- | キー (範囲内であること)
+    k ->
+    -- | @0 .. keySize - 1@ の添字
+    Int
   keyIndex _ _ = -1
-  keyAt :: (k, k) -> Int -> k
+  -- | 添字からキーに戻す ('keyIndex' の逆)。
+  keyAt ::
+    -- | 範囲 @(lo, hi)@
+    (k, k) ->
+    -- | @0 .. keySize - 1@ の添字
+    Int ->
+    -- | その添字のキー
+    k
   keyAt _ _ = error "dense: このキーの型は sparse 専用"
 
 instance BFSKey [a]
@@ -171,6 +199,7 @@ instance (BFSKey a, BFSKey b, BFSKey c) => BFSKey (a, b, c) where
 
 -- | Map を表にする。'Int' キーは IntMap、ほかの 'Ord' は Map。
 class SparseKey k where
+  -- | Map で持つ表。
   sparse :: Space k
 
 instance {-# OVERLAPPING #-} SparseKey Int where
@@ -179,6 +208,7 @@ instance {-# OVERLAPPING #-} SparseKey Int where
 instance {-# OVERLAPPABLE #-} (Ord k) => SparseKey k where
   sparse = Sparse (mapKeys MapS.empty MapS.lookup MapS.insert)
 
+-- | Map 系の空・引く・入れるから 'SparseKeys' を作る ('sparse' の本体)。
 {-# INLINE mapKeys #-}
 mapKeys :: t -> (k -> t -> Maybe Int) -> (k -> Int -> t -> t) -> ST s (SparseKeys s k)
 mapKeys empty lookupT insertT = do
@@ -200,12 +230,19 @@ mapKeys empty lookupT insertT = do
         sparseFreeze = (\m k -> fromMaybe (-1) (lookupT k m)) <$> readSTRef ref
       }
 
--- 伸びる boxed の列 (sparse のキー用)。
-data Grow s k = Grow !(STRef s (VM.MVector s k)) !(UM.MVector s Int)
+-- | 伸びる boxed の列 (sparse のキー用)。
+data Grow s k
+  = Grow
+      -- | 中身 (足りなくなったら倍に伸ばす)
+      !(STRef s (VM.MVector s k))
+      -- | 長さ 1 で、要素数を持つ
+      !(UM.MVector s Int)
 
+-- | 空の 'Grow' を作る。
 newGrow :: ST s (Grow s k)
 newGrow = Grow <$> (VM.unsafeNew 16 >>= newSTRef) <*> UM.replicate 1 0
 
+-- | 末尾に足し、その添字を返す。
 pushGrow :: Grow s k -> k -> ST s Int
 pushGrow (Grow ref cnt) k = do
   buf <- readSTRef ref
@@ -221,31 +258,46 @@ pushGrow (Grow ref cnt) k = do
   UM.unsafeWrite cnt 0 (n + 1)
   pure n
 
+-- | 添字 @i@ の要素。
 readGrow :: Grow s k -> Int -> ST s k
 readGrow (Grow ref _) i = readSTRef ref >>= \buf -> VM.unsafeRead buf i
 
 -- ---------------------------------------------------------------------
 -- モナド
 
--- 添字ごとの状態 (0 = 未訪問, 1 = 値あり (キューにいるかも), 2 = 取り出し済み) と値。
+-- | 添字ごとの状態と値。
 -- 値の配列の型は 'DPValue' が値の型から決めるので、ここでは伏せて持ち、
 -- 使う側で 'withDPVector' から戻す (ループの中で Vector の辞書を引かずに済む)。
-data Arr s = Arr !(UM.MVector s Word8) Any
+data Arr s
+  = Arr
+      -- | 状態 (0 = 未訪問, 1 = 値あり (キューにいるかも), 2 = 取り出し済み)
+      !(UM.MVector s Word8)
+      -- | 値の MVector (型を伏せたもの)
+      Any
 
+-- | 伏せた値の配列を、第 1 引数で決まる型の MVector に戻す。
 {-# INLINE castMV #-}
 castMV :: (v a -> v a) -> Any -> G.Mutable v s a
 castMV _ = unsafeCoerce
 
-data Keys s k = KeysDense !(k, k) | KeysSparse !(SparseKeys s k)
+-- | キーと添字の対応。
+data Keys s k
+  = -- | 'dense' の範囲
+    KeysDense !(k, k)
+  | -- | 'sparse' の Map
+    KeysSparse !(SparseKeys s k)
 
+-- | BFS の実行中の状態。
 data Env s k a = Env
-  { envKeys :: !(Keys s k),
-    -- 状態と値 (sparse では伸びる)
+  { -- | キーと添字の対応
+    envKeys :: !(Keys s k),
+    -- | 状態と値 (sparse では伸びる)
     envArr :: !(STRef s (Arr s)),
-    -- 両端キュー (リングバッファ) と、取り出した順
+    -- | 両端キュー (リングバッファ)
     envQue :: !(STRef s (UM.MVector s Int)),
+    -- | 取り出した順
     envOrd :: !(STRef s (UM.MVector s Int)),
-    -- 0: キューの先頭, 1: キューの要素数, 2: 取り出した数
+    -- | 0: キューの先頭, 1: キューの要素数, 2: 取り出した数
     envReg :: !(UM.MVector s Int)
   }
 
@@ -266,23 +318,32 @@ instance Monad (BFS s k a) where
   {-# INLINE (>>=) #-}
   BFS m >>= f = BFS $ \e -> m e >>= \x -> runWith (f x) e
 
--- @Just x <- valueOf k@ のように書ける (外れたらエラー)。
+-- | @Just x <- valueOf k@ のように書ける (外れたらエラー)。
 instance MonadFail (BFS s k a) where
   fail = error
 
+-- | 'BFS' の中身を取り出して実行する。
 {-# INLINE runWith #-}
 runWith :: BFS s k a r -> Env s k a -> ST s r
 runWith (BFS m) = m
 
 -- | BFS を回す。本体の戻り値と、値の表を返す。
 {-# INLINE runBFS #-}
-runBFS :: (BFSKey k, DPValue a) => Space k -> (forall s. BFS s k a r) -> (r, k -> Maybe a)
+runBFS ::
+  (BFSKey k, DPValue a) =>
+  -- | @sp@: 表の持ち方 ('dense' / 'sparse')
+  Space k ->
+  -- | @body@: 本体 ('visitQ' で積み、'whileQ' / 'pullQ' で回す)
+  (forall s. BFS s k a r) ->
+  -- | 本体の戻り値と、値の表 (訪れていないキー・範囲外は 'Nothing')
+  (r, k -> Maybe a)
 runBFS sp body = runST $ do
   e <- newEnv sp
   r <- runWith body e
   tbl <- freezeEnv e
   pure (r, tbl)
 
+-- | 空の 'Env' を作る。
 {-# INLINE newEnv #-}
 newEnv :: forall s k a. (BFSKey k, DPValue a) => Space k -> ST s (Env s k a)
 newEnv sp = do
@@ -297,6 +358,7 @@ newEnv sp = do
     <*> (UM.unsafeNew n >>= newSTRef)
     <*> U.thaw (U.fromListN 3 [0, 0, 0])
 
+-- | 値の表を固めて、キーから値を引く関数にする。
 {-# INLINE freezeEnv #-}
 freezeEnv :: forall s k a. (BFSKey k, DPValue a) => Env s k a -> ST s (k -> Maybe a)
 freezeEnv e = withDPVector @a $ \asV -> do
@@ -310,12 +372,12 @@ freezeEnv e = withDPVector @a $ \asV -> do
     let i = find k
      in if i >= 0 && U.unsafeIndex flags i /= 0 then Just (G.unsafeIndex vals i) else Nothing
 
--- 型を合わせるだけ。
+-- | 型を合わせるだけ。
 {-# INLINE asMutOf #-}
 asMutOf :: ST s (G.Mutable v s a) -> (v a -> v a) -> ST s (G.Mutable v s a)
 asMutOf m _ = m
 
--- キーの添字。範囲外か (ins が False で) 未登録なら -1。
+-- | キーの添字。範囲外か (ins が False で) 未登録なら -1。
 -- sparse で新しく振ったときは表を伸ばす。
 {-# INLINE indexOf #-}
 indexOf :: (BFSKey k, DPValue a) => Bool -> Env s k a -> k -> ST s Int
@@ -328,13 +390,14 @@ indexOf ins e k = case envKeys e of
         pure i
     | otherwise -> sparseFind sk k
 
+-- | 添字からキーに戻す。
 {-# INLINE keyOf #-}
 keyOf :: (BFSKey k) => Env s k a -> Int -> ST s k
 keyOf e i = case envKeys e of
   KeysDense bnds -> pure $! keyAt bnds i
   KeysSparse sk -> sparseKeyAt sk i
 
--- 状態と値を n 以上に伸ばす (増えた状態は 0)。
+-- | 状態と値を n 以上に伸ばす (増えた状態は 0)。
 growArr :: forall s k a. (DPValue a) => Env s k a -> Int -> ST s ()
 growArr e n = withDPVector @a $ \asV -> do
   Arr fl mv <- readSTRef (envArr e)
@@ -346,19 +409,22 @@ growArr e n = withDPVector @a $ \asV -> do
     mv' <- GM.unsafeGrow (castMV asV mv) (cap' - cap)
     writeSTRef (envArr e) (Arr fl' (unsafeCoerce mv'))
 
--- 状態と値。
+-- | 添字 @i@ の状態を読む。
 {-# INLINE readFlag #-}
 readFlag :: Env s k a -> Int -> ST s Word8
 readFlag e i = readSTRef (envArr e) >>= \(Arr fl _) -> UM.unsafeRead fl i
 
+-- | 添字 @i@ の状態を書く。
 {-# INLINE writeFlag #-}
 writeFlag :: Env s k a -> Int -> Word8 -> ST s ()
 writeFlag e i f = readSTRef (envArr e) >>= \(Arr fl _) -> UM.unsafeWrite fl i f
 
+-- | 添字 @i@ の値を読む。
 {-# INLINE readVal #-}
 readVal :: forall s k a. (DPValue a) => Env s k a -> Int -> ST s a
 readVal e i = withDPVector @a $ \asV -> readSTRef (envArr e) >>= \(Arr _ mv) -> GM.unsafeRead (castMV asV mv) i
 
+-- | 添字 @i@ に値を書く (WHNF まで評価する)。
 {-# INLINE writeVal #-}
 writeVal :: forall s k a. (DPValue a) => Env s k a -> Int -> a -> ST s ()
 writeVal e i x = withDPVector @a $ \asV -> readSTRef (envArr e) >>= \(Arr _ mv) -> GM.unsafeWrite (castMV asV mv) i $! x
@@ -368,9 +434,16 @@ writeVal e i x = withDPVector @a $ \asV -> readSTRef (envArr e) >>= \(Arr _ mv) 
 liftST :: ST s x -> BFS s k a x
 liftST m = BFS $ \_ -> m
 
--- | まだ値のないキーなら値を書いて末尾に積み、'True'。訪問済みか範囲外なら 'False'。
+-- | まだ値のないキーなら値を書いて末尾に積む。
 {-# INLINE visitQ #-}
-visitQ :: (BFSKey k, DPValue a) => k -> a -> BFS s k a Bool
+visitQ ::
+  (BFSKey k, DPValue a) =>
+  -- | @k@: 訪れるキー
+  k ->
+  -- | @x@: 書く値 (距離など)
+  a ->
+  -- | 書いて積んだら 'True'。訪問済みか範囲外なら 'False'
+  BFS s k a Bool
 visitQ k x = BFS $ \e -> do
   i <- indexOf True e k
   if i < 0
@@ -395,8 +468,8 @@ data Push
     NoPush
   deriving (Eq, Show)
 
--- | 今の値 (未訪問なら 'Nothing') を渡し、@Just (新しい値, 積む位置)@ なら書いて積む。
--- 'Nothing' なら何もしない。書いたら 'True'。範囲外・取り出し済みのキーは関数を呼ばずに 'False'。
+-- | キーの値を関数で決めて書き、指定した位置に積む。
+-- 範囲外・取り出し済みのキーは関数を呼ばない。
 --
 -- > -- 0-1 BFS: コスト c (0 か 1) の辺
 -- > updateQ q $ \old -> if maybe True (d + c <) old
@@ -405,7 +478,15 @@ data Push
 -- 既にキューにいるキーをまた積むと 2 回入るが、後の方は取り出すときに読み飛ばす。
 -- 未訪問のキーに 'NoPush' で書くと、訪問済みだが取り出されないキーになる ('writeValue' と同じ)。
 {-# INLINE updateQ #-}
-updateQ :: (BFSKey k, DPValue a) => k -> (Maybe a -> Maybe (a, Push)) -> BFS s k a Bool
+updateQ ::
+  (BFSKey k, DPValue a) =>
+  -- | @k@: 書き換えるキー
+  k ->
+  -- | @g old@: 今の値 @old@ (未訪問なら 'Nothing') から、@Just (新しい値, 積む位置)@ を返せば
+  -- 書いて積む。'Nothing' なら何もしない
+  (Maybe a -> Maybe (a, Push)) ->
+  -- | 書いたら 'True'。@g@ が 'Nothing' か、範囲外・取り出し済みなら 'False'
+  BFS s k a Bool
 updateQ k g = BFS $ \e -> do
   i <- indexOf True e k
   if i < 0
@@ -427,7 +508,7 @@ updateQ k g = BFS $ \e -> do
                 NoPush -> pure ()
               pure True
 
--- 先頭を取り出して、キーと値を k に渡す。空なら z。
+-- | 先頭を取り出して、キーと値を k に渡す。空なら z。
 {-# INLINE pullWith #-}
 pullWith :: (BFSKey k, DPValue a) => Env s k a -> ST s r -> (k -> a -> ST s r) -> ST s r
 pullWith e z k = go
@@ -454,7 +535,8 @@ pullWith e z k = go
 pullQ :: (BFSKey k, DPValue a) => BFS s k a (Maybe (k, a))
 pullQ = BFS $ \e -> pullWith e (pure Nothing) (\k x -> pure (Just (k, x)))
 
--- | キューが空になるまで取り出し、キーと値を本体に渡す。
+-- | キューが空になるまで取り出し、キー @k@ と今の値 @x@ を本体 @f k x@ に渡す。
+-- 本体の中で 'visitQ' などで積めば、それも取り出す。
 {-# INLINE whileQ #-}
 whileQ :: (BFSKey k, DPValue a) => (k -> a -> BFS s k a ()) -> BFS s k a ()
 whileQ f = BFS $ \e ->
@@ -474,7 +556,14 @@ valueOf k = BFS $ \e -> do
 
 -- | 値を書く (訪問済みになる)。キューには積まない。範囲外なら何もしない。
 {-# INLINE writeValue #-}
-writeValue :: (BFSKey k, DPValue a) => k -> a -> BFS s k a ()
+writeValue ::
+  (BFSKey k, DPValue a) =>
+  -- | @k@: キー
+  k ->
+  -- | @x@: 書く値 (今の値があっても上書きする)
+  a ->
+  -- | 何も返さない
+  BFS s k a ()
 writeValue k x = BFS $ \e -> do
   i <- indexOf True e k
   when (i >= 0) $ do
@@ -482,9 +571,16 @@ writeValue k x = BFS $ \e -> do
     when (f == 0) $ writeFlag e i 1
     writeVal e i x
 
--- | 値があれば @f@ で書き換える。なければ何もしない。キューには積まない。
+-- | 値があれば書き換える。なければ (範囲外を含む) 何もしない。キューには積まない。
 {-# INLINE modifyValue #-}
-modifyValue :: (BFSKey k, DPValue a) => k -> (a -> a) -> BFS s k a ()
+modifyValue ::
+  (BFSKey k, DPValue a) =>
+  -- | @k@: キー
+  k ->
+  -- | @g x@: 今の値 @x@ から新しい値を作る (最短経路の数を足し込むなど)
+  (a -> a) ->
+  -- | 何も返さない
+  BFS s k a ()
 modifyValue k g = BFS $ \e -> do
   i <- indexOf False e k
   when (i >= 0) $ do
@@ -502,7 +598,7 @@ orderQ = BFS $ \e -> do
 -- ---------------------------------------------------------------------
 -- 両端キュー (伸びるリングバッファ) と、取り出した順の記録
 
--- 満杯なら倍の大きさに移す (先頭を 0 に揃える)。
+-- | 満杯なら倍の大きさに移す (先頭を 0 に揃える)。
 growQue :: Env s k a -> ST s ()
 growQue e = do
   buf <- readSTRef (envQue e)
@@ -517,6 +613,7 @@ growQue e = do
   UM.unsafeWrite (envReg e) 0 0
   writeSTRef (envQue e) buf'
 
+-- | 添字 @i@ をキューの末尾に積む。
 {-# INLINE pushBack #-}
 pushBack :: Env s k a -> Int -> ST s ()
 pushBack e i = do
@@ -529,6 +626,7 @@ pushBack e i = do
   UM.unsafeWrite buf (if t >= UM.length buf then t - UM.length buf else t) i
   UM.unsafeWrite (envReg e) 1 (n + 1)
 
+-- | 添字 @i@ をキューの先頭に積む。
 {-# INLINE pushFront #-}
 pushFront :: Env s k a -> Int -> ST s ()
 pushFront e i = do
@@ -542,7 +640,7 @@ pushFront e i = do
   UM.unsafeWrite (envReg e) 0 hd'
   UM.unsafeWrite (envReg e) 1 (n + 1)
 
--- 空でないときだけ呼ぶ。
+-- | キューの先頭の添字を取り出す。空でないときだけ呼ぶ。
 {-# INLINE popFront #-}
 popFront :: Env s k a -> ST s Int
 popFront e = do
@@ -555,6 +653,7 @@ popFront e = do
   UM.unsafeWrite (envReg e) 1 (n - 1)
   pure i
 
+-- | 添字 @i@ を取り出した順の記録に足す。
 {-# INLINE pushOrder #-}
 pushOrder :: Env s k a -> Int -> ST s ()
 pushOrder e i = do

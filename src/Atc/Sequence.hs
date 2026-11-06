@@ -35,15 +35,30 @@ prefixSums = G.scanl' (+) 0
 {-# INLINE prefixSums #-}
 
 -- | 'prefixSums' から @[l, r)@ の和。@0 <= l <= r <= n@。O(1)。
-sliceSum :: (G.Vector v a, Num a) => Int -> Int -> v a -> a
+sliceSum ::
+  (G.Vector v a, Num a) =>
+  -- | @l@: 左端 (含む)
+  Int ->
+  -- | @r@: 右端 (含まない)
+  Int ->
+  -- | @ps@: 'prefixSums' の結果 (長さ n + 1)
+  v a ->
+  -- | @a_l + .. + a_{r-1}@
+  a
 sliceSum l r ps
   | l < 0 || r < l || r >= G.length ps = error ("Atc.Sequence.sliceSum: 範囲外 [" ++ show l ++ ", " ++ show r ++ ")")
   | otherwise = G.unsafeIndex ps r - G.unsafeIndex ps l
 {-# INLINE sliceSum #-}
 
--- | いもす法: 長さ @n@ の 0 の列で、各 @(l, r, x)@ の区間 @[l, r)@ に @x@ を足した結果。
--- 区間は @0 <= l <= r <= n@ に切り詰める。O(n + 区間の数)。
-imos :: (U.Unbox a, Num a) => Int -> [(Int, Int, a)] -> U.Vector a
+-- | いもす法: 0 の列の各区間に値を足した結果。O(n + 区間の数)。
+imos ::
+  (U.Unbox a, Num a) =>
+  -- | @n@: 列の長さ
+  Int ->
+  -- | @(l, r, x)@: 区間 @[l, r)@ に @x@ を足す。区間は @0 <= l <= r <= n@ に切り詰める
+  [(Int, Int, a)] ->
+  -- | 足した結果の列 (長さ @n@)
+  U.Vector a
 imos n qs = U.init (U.scanl1' (+) diff)
   where
     diff =
@@ -69,17 +84,31 @@ compressCoords xs = (vals, ids)
     ids = U.generate (G.length xs) (\i -> compressedIndex (G.unsafeIndex xs i) vals)
 {-# INLINE compressCoords #-}
 
--- | 昇順の @vals@ で、@x@ 以上の最初の番号 (なければ長さ)。@x@ が @vals@ にあればその番号。O(log n)。
-compressedIndex :: (G.Vector v a, Ord a) => a -> v a -> Int
+-- | 座標圧縮した値の番号を引く。O(log n)。
+compressedIndex ::
+  (G.Vector v a, Ord a) =>
+  -- | @x@: 圧縮前の値
+  a ->
+  -- | @vals@: 昇順の値の列 ('compressCoords' の 1 つ目など)
+  v a ->
+  -- | @x@ 以上の最初の番号 (なければ長さ)。@x@ が @vals@ にあればその番号
+  Int
 compressedIndex x vals = bisect (-1) (G.length vals) (\i -> G.unsafeIndex vals i < x) + 1
 {-# INLINE compressedIndex #-}
 
 -- ---------------------------------------------------------------------
 -- 最長増加部分列
 
--- | 最長の部分列の長さ。@rel@ は隣り合う要素の関係で、@(<)@ なら狭義増加、
--- @(<=)@ なら広義増加、@(>)@ なら狭義減少。O(n log n)。
-lisLength :: (G.Vector v a) => (a -> a -> Bool) -> v a -> Int
+-- | 最長の部分列の長さ。O(n log n)。
+lisLength ::
+  (G.Vector v a) =>
+  -- | @rel x y@: 部分列で @x@ の次に @y@ を置けるか (隣り合う要素の関係)。@(<)@ なら狭義増加、
+  -- @(<=)@ なら広義増加、@(>)@ なら狭義減少
+  (a -> a -> Bool) ->
+  -- | 列
+  v a ->
+  -- | 最長の部分列の長さ (空なら 0)
+  Int
 lisLength rel xs = if G.null xs then 0 else U.maximum (lisEndingAt rel xs)
 {-# INLINE lisLength #-}
 
@@ -87,7 +116,14 @@ lisLength rel xs = if G.null xs then 0 else U.maximum (lisEndingAt rel xs)
 --
 -- 長さ k の部分列の末尾として最も「続けやすい」値を @tails[k - 1]@ に持つ
 -- (@(<)@ なら最小の末尾)。@x@ は @rel (tails[j]) x@ が偽になる最初の @j@ に置く。
-lisEndingAt :: (G.Vector v a) => (a -> a -> Bool) -> v a -> U.Vector Int
+lisEndingAt ::
+  (G.Vector v a) =>
+  -- | @rel x y@: 部分列で @x@ の次に @y@ を置けるか ('lisLength' と同じ)
+  (a -> a -> Bool) ->
+  -- | 列
+  v a ->
+  -- | @i@ 番目で終わる最長の部分列の長さ (添字で引く)
+  U.Vector Int
 lisEndingAt rel xs = runST $ do
   let n = G.length xs
   tails <- G.thaw xs -- 型を合わせるため写す (中身は上書きする)
@@ -114,7 +150,14 @@ lisEndingAt rel xs = runST $ do
 {-# INLINE lisEndingAt #-}
 
 -- | 最長の部分列の添字 (昇順) の 1 つ。O(n log n)。
-lisIndices :: (G.Vector v a) => (a -> a -> Bool) -> v a -> [Int]
+lisIndices ::
+  (G.Vector v a) =>
+  -- | @rel x y@: 部分列で @x@ の次に @y@ を置けるか ('lisLength' と同じ)
+  (a -> a -> Bool) ->
+  -- | 列
+  v a ->
+  -- | 最長の部分列の添字 (昇順。空の列なら空)
+  [Int]
 lisIndices rel xs
   | G.null xs = []
   | otherwise = go (U.maxIndex ends) (U.maximum ends) []

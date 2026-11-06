@@ -51,7 +51,7 @@
 -- > uniteDiffUF x y d uf   m Bool    x_y - x_x = d としてつなぐ。矛盾したら False (矛盾しなければ True)
 -- > modifyValueUF f x uf   m ()      x を含む成分の値を書き換える
 --
--- つなぐと、成分の値は @op (x 側の値) (y 側の値)@ になる。
+-- つなぐと、成分の値は作るときに渡した @op@ でまとめる ('newUFWith' の引数の説明)。
 -- 重みありで 'uniteUF' を使うと、差 0 ('zeroW') でつなぐ。
 -- 値と重みは書き込むときに WHNF まで評価する。
 --
@@ -107,8 +107,19 @@ import qualified Data.Vector.Unboxed.Mutable as UM
 
 -- | 差を取れる型 (可換群)。@x_y - x_x@ を @addW wy (negW wx)@ で求める。
 class (Eq w) => UFWeight w where
+  -- | 差 0 (単位元)。
   zeroW :: w
-  addW :: w -> w -> w
+
+  -- | 重みの和。
+  addW ::
+    -- | 重み
+    w ->
+    -- | 重み
+    w ->
+    -- | 2 つの和
+    w
+
+  -- | 符号を反転した重み (逆元)。
   negW :: w -> w
 
 instance {-# OVERLAPPING #-} UFWeight () where
@@ -151,30 +162,114 @@ type UFOf w v a = (WeightOf w, G.Vector v a)
 -- ---------------------------------------------------------------------
 -- 型
 
--- | 不変版。根・大きさ (根の位置)・同じ成分の次の頂点・根から見た重み・値 (根の位置)・成分の数・値の op。
-data UnionFind w v a = UnionFind !(U.Vector Int) !(U.Vector Int) !(U.Vector Int) !(WStore w w) !(v a) !Int (a -> a -> a)
+-- | 不変版。各配列は頂点番号で引く。
+data UnionFind w v a
+  = UnionFind
+      -- | 根
+      !(U.Vector Int)
+      -- | 大きさ (根の位置)
+      !(U.Vector Int)
+      -- | 同じ成分の次の頂点
+      !(U.Vector Int)
+      -- | 根から見た重み
+      !(WStore w w)
+      -- | 値 (根の位置)
+      !(v a)
+      -- | 成分の数
+      !Int
+      -- | 値の op
+      (a -> a -> a)
 
--- | 可変版。親 (根なら -大きさ)・同じ成分の次の頂点・親から見た重み・値 (根の位置)・成分の数 (長さ 1)・値の op。
+-- | 可変版。各配列は頂点番号で引く。
 data MUnionFind m w v a
   = MUnionFind
+      -- | 親 (根なら -大きさ)
       !(UM.MVector (PrimState m) Int)
+      -- | 同じ成分の次の頂点
       !(UM.MVector (PrimState m) Int)
+      -- | 親から見た重み
       !(G.Mutable (WStore w) (PrimState m) w)
+      -- | 値 (根の位置)
       !(G.Mutable v (PrimState m) a)
+      -- | 成分の数 (長さ 1)
       !(UM.MVector (PrimState m) Int)
+      -- | 値の op
       (a -> a -> a)
 
 -- | 不変版と可変版で共通の関数。可変版は返り値が @m@ に包まれる。
 class UFKind k where
+  -- | 返り値の型 (不変版はそのまま、可変版は @m@ に包む)。
   type UFRet k x
-  rootUF :: (UFOf w v a) => Int -> k w v a -> UFRet k Int
-  sameUF :: (UFOf w v a) => Int -> Int -> k w v a -> UFRet k Bool
-  sizeUF :: (UFOf w v a) => Int -> k w v a -> UFRet k Int
+
+  -- | 根。
+  rootUF ::
+    (UFOf w v a) =>
+    -- | @x@: 頂点
+    Int ->
+    -- | Union-Find
+    k w v a ->
+    -- | @x@ を含む成分の根
+    UFRet k Int
+
+  -- | 同じ成分か。
+  sameUF ::
+    (UFOf w v a) =>
+    -- | @x@: 頂点
+    Int ->
+    -- | @y@: 頂点
+    Int ->
+    -- | Union-Find
+    k w v a ->
+    -- | @x@ と @y@ が同じ成分か
+    UFRet k Bool
+
+  -- | 成分の大きさ。
+  sizeUF ::
+    (UFOf w v a) =>
+    -- | @x@: 頂点
+    Int ->
+    -- | Union-Find
+    k w v a ->
+    -- | @x@ を含む成分の頂点数
+    UFRet k Int
+
+  -- | 成分の数。
   countUF :: (UFOf w v a) => k w v a -> UFRet k Int
+
+  -- | すべての成分。成分を最小の頂点の順に、各成分の中は頂点の昇順に並べる。O(n)。
   groupsUF :: (UFOf w v a) => k w v a -> UFRet k (V.Vector (U.Vector Int))
-  valueUF :: (UFOf w v a) => Int -> k w v a -> UFRet k a
-  diffUF :: (UFOf w v a) => Int -> Int -> k w v a -> UFRet k (Maybe w)
-  membersUF :: (UFOf w v a) => Int -> k w v a -> UFRet k (U.Vector Int)
+
+  -- | 成分の値。
+  valueUF ::
+    (UFOf w v a) =>
+    -- | @x@: 頂点
+    Int ->
+    -- | Union-Find
+    k w v a ->
+    -- | @x@ を含む成分の値
+    UFRet k a
+
+  -- | 重みの差。
+  diffUF ::
+    (UFOf w v a) =>
+    -- | @x@: 頂点
+    Int ->
+    -- | @y@: 頂点
+    Int ->
+    -- | Union-Find
+    k w v a ->
+    -- | @x_y - x_x@。別の成分なら 'Nothing'
+    UFRet k (Maybe w)
+
+  -- | 成分の頂点。O(成分の大きさ)。
+  membersUF ::
+    (UFOf w v a) =>
+    -- | @x@: 頂点
+    Int ->
+    -- | Union-Find
+    k w v a ->
+    -- | @x@ を含む成分の頂点。@x@ から始まり、昇順とは限らない
+    UFRet k (U.Vector Int)
 
 instance UFKind UnionFind where
   type UFRet UnionFind x = x
@@ -237,14 +332,29 @@ newUF = newWUF
 newWUF :: (PrimMonad m, WeightOf w) => Int -> m (MUnionFind m w U.Vector ())
 newWUF n = newWUFWith (\_ _ -> ()) (U.replicate n ())
 
--- | 重みなし・値あり。頂点数は値の Vector の長さ。
+-- | 重みなし・値あり。
 {-# INLINE newUFWith #-}
-newUFWith :: (PrimMonad m, G.Vector v a) => (a -> a -> a) -> v a -> m (MUnionFind m () v a)
+newUFWith ::
+  (PrimMonad m, G.Vector v a) =>
+  -- | @op vx vy@: つないだ成分の値。@vx@ は @x@ 側 ('uniteUF' の第 1 引数の側)、@vy@ は @y@ 側の値
+  (a -> a -> a) ->
+  -- | @xs@: 各頂点の初めの値 (頂点数はこの長さ)
+  v a ->
+  -- | 可変版
+  m (MUnionFind m () v a)
 newUFWith = newWUFWith
 
--- | 重みあり・値あり。頂点数は値の Vector の長さ。
+-- | 重みあり・値あり。
 {-# INLINE newWUFWith #-}
-newWUFWith :: (PrimMonad m, UFOf w v a) => (a -> a -> a) -> v a -> m (MUnionFind m w v a)
+newWUFWith ::
+  (PrimMonad m, UFOf w v a) =>
+  -- | @op vx vy@: つないだ成分の値。@vx@ は @x@ 側 ('uniteUF' / 'uniteDiffUF' の第 1 引数の側)、
+  -- @vy@ は @y@ 側の値
+  (a -> a -> a) ->
+  -- | @xs@: 各頂点の初めの値 (頂点数はこの長さ)
+  v a ->
+  -- | 可変版
+  m (MUnionFind m w v a)
 newWUFWith op xs = do
   let n = G.length xs
   par <- UM.replicate n (-1)
@@ -255,18 +365,31 @@ newWUFWith op xs = do
   cnt <- UM.replicate 1 n
   pure (MUnionFind par nxt ws vals cnt op)
 
--- | 辺 @u v@ (幅 2) の並びから不変版を作る。頂点番号の始まりは 'fromOneBased' / 'fromZeroBased' で示す。
+-- | 辺の並びから不変版を作る。
 {-# INLINE buildUF #-}
-buildUF :: (G.Vector u Int) => Int -> ZeroBased (Grid u Int) -> UnionFind () U.Vector ()
+buildUF ::
+  (G.Vector u Int) =>
+  -- | @n@: 頂点数
+  Int ->
+  -- | @g@: 辺 @u v@ (幅 2) の並び。頂点番号の始まりは 'fromOneBased' / 'fromZeroBased' で示す
+  ZeroBased (Grid u Int) ->
+  -- | 全部つないだ不変版
+  UnionFind () U.Vector ()
 buildUF n g = createUF $ do
   uf <- newUF n
   forM_ (ufEdges "buildUF" 2 g) $ \(x, y, _) -> uniteUF x y uf
   pure uf
 
--- | @u v d@ (幅 3、x_v - x_u = d) の並びから不変版を作る。矛盾したら 'Nothing'。
--- 頂点番号の始まりは 'fromOneBased' / 'fromZeroBased' で示す。
+-- | 重みつきの辺の並びから不変版を作る。
 {-# INLINE buildWUF #-}
-buildWUF :: (G.Vector u Int) => Int -> ZeroBased (Grid u Int) -> Maybe (UnionFind Int U.Vector ())
+buildWUF ::
+  (G.Vector u Int) =>
+  -- | @n@: 頂点数
+  Int ->
+  -- | @g@: @u v d@ (幅 3、x_v - x_u = d) の並び。頂点番号の始まりは 'fromOneBased' / 'fromZeroBased' で示す
+  ZeroBased (Grid u Int) ->
+  -- | 全部つないだ不変版。矛盾したら 'Nothing'
+  Maybe (UnionFind Int U.Vector ())
 buildWUF n g = runST $ do
   uf <- newWUF n
   ok <- and <$> mapM (\(x, y, d) -> uniteDiffUF x y d uf) (ufEdges "buildWUF" 3 g)
@@ -292,19 +415,48 @@ thawUF (UnionFind rs ss nx ws vs c op) = do
 -- ---------------------------------------------------------------------
 -- 可変版だけ
 
--- | つなぐ。新しくつないだら True (もともと同じ成分なら False)。
+-- | つなぐ。重みありなら差 0 ('zeroW') でつなぐ。
 {-# INLINE uniteUF #-}
-uniteUF :: (PrimMonad m, UFOf w v a) => Int -> Int -> MUnionFind m w v a -> m Bool
+uniteUF ::
+  (PrimMonad m, UFOf w v a) =>
+  -- | @x@: 頂点
+  Int ->
+  -- | @y@: 頂点
+  Int ->
+  -- | 可変版
+  MUnionFind m w v a ->
+  -- | 新しくつないだら True (もともと同じ成分なら False)
+  m Bool
 uniteUF x y uf = (== 2) <$> ufUnite x y zeroW uf
 
--- | @x_y - x_x = d@ としてつなぐ。矛盾したら False (もともと同じ成分で矛盾しなければ True)。
+-- | @x_y - x_x = d@ としてつなぐ。
 {-# INLINE uniteDiffUF #-}
-uniteDiffUF :: (PrimMonad m, UFOf w v a) => Int -> Int -> w -> MUnionFind m w v a -> m Bool
+uniteDiffUF ::
+  (PrimMonad m, UFOf w v a) =>
+  -- | @x@: 頂点
+  Int ->
+  -- | @y@: 頂点
+  Int ->
+  -- | @d@: 重みの差 @x_y - x_x@
+  w ->
+  -- | 可変版
+  MUnionFind m w v a ->
+  -- | 矛盾したら False (もともと同じ成分で矛盾しなければ True)
+  m Bool
 uniteDiffUF x y d uf = (/= 0) <$> ufUnite x y d uf
 
--- | @x@ を含む成分の値を書き換える。
+-- | 成分の値を書き換える。
 {-# INLINE modifyValueUF #-}
-modifyValueUF :: (PrimMonad m, UFOf w v a) => (a -> a) -> Int -> MUnionFind m w v a -> m ()
+modifyValueUF ::
+  (PrimMonad m, UFOf w v a) =>
+  -- | @f v@: 今の値 @v@ から新しい値を作る
+  (a -> a) ->
+  -- | @x@: 頂点
+  Int ->
+  -- | 可変版
+  MUnionFind m w v a ->
+  -- | なし (@x@ を含む成分の値を書き換える)
+  m ()
 modifyValueUF f x uf@(MUnionFind _ _ _ vals _ _) = do
   r <- rootUF x uf
   v <- GM.unsafeRead vals r
@@ -313,16 +465,18 @@ modifyValueUF f x uf@(MUnionFind _ _ _ vals _ _) = do
 -- ---------------------------------------------------------------------
 -- 中身
 
+-- | 頂点数。
 {-# INLINE ufSize #-}
 ufSize :: (PrimMonad m) => MUnionFind m w v a -> Int
 ufSize (MUnionFind par _ _ _ _ _) = UM.length par
 
+-- | 頂点番号が範囲内か確かめる (範囲外なら 'error')。
 ufCheck :: UnionFind w v a -> Int -> ()
 ufCheck (UnionFind rs _ _ _ _ _ _) x
   | 0 <= x && x < U.length rs = ()
   | otherwise = error "Atc.UnionFind: 頂点番号が範囲外です"
 
--- 根と、根から見た重み (x_x - x_根)。経路を圧縮する。
+-- | 根と、根から見た重み (x_x - x_根)。経路を圧縮する。
 {-# INLINE ufFind #-}
 ufFind :: (PrimMonad m, WeightOf w) => MUnionFind m w v a -> Int -> m (Int, w)
 ufFind uf@(MUnionFind par _ ws _ _ _) x0
@@ -344,7 +498,7 @@ ufFind uf@(MUnionFind par _ ws _ _ _) x0
               GM.unsafeWrite ws x w
               pure (r, w)
 
--- 0: 矛盾、1: もともと同じ成分、2: 新しくつないだ。
+-- | 'uniteUF' / 'uniteDiffUF' の本体。0: 矛盾、1: もともと同じ成分、2: 新しくつないだ。
 {-# INLINE ufUnite #-}
 ufUnite :: (PrimMonad m, UFOf w v a) => Int -> Int -> w -> MUnionFind m w v a -> m Int
 ufUnite x y d uf@(MUnionFind par nxt ws vals cnt op) = do
@@ -373,11 +527,12 @@ ufUnite x y d uf@(MUnionFind par nxt ws vals cnt op) = do
       UM.unsafeModify cnt (subtract 1) 0
       pure 2
 
+-- | 全頂点の根。
 {-# INLINE ufRoots #-}
 ufRoots :: (PrimMonad m, WeightOf w) => MUnionFind m w v a -> m (U.Vector Int)
 ufRoots uf = U.generateM (ufSize uf) (fmap fst . ufFind uf)
 
--- freeze は写すかどうか (G.freeze / G.unsafeFreeze)。
+-- | 可変版から不変版を作る。freeze は写すかどうか (G.freeze / G.unsafeFreeze)。
 {-# INLINE ufFreeze #-}
 ufFreeze ::
   (PrimMonad m, UFOf w v a) =>
@@ -393,7 +548,7 @@ ufFreeze frz uf@(MUnionFind par nxt _ vals cnt op) = do
   c <- UM.unsafeRead cnt 0
   pure (UnionFind (U.convert (V.map fst rw)) ss nx (G.convert (V.map snd rw)) vs c op)
 
--- 根の並びから、成分を最小の頂点の順に、成分の中を昇順に並べる。
+-- | 根の並びから、成分を最小の頂点の順に、成分の中を昇順に並べる。
 ufGroups :: U.Vector Int -> V.Vector (U.Vector Int)
 ufGroups rs = runST $ do
   let n = U.length rs
@@ -419,7 +574,7 @@ ufGroups rs = runST $ do
   flat <- U.unsafeFreeze out
   pure (V.generate m (\g -> U.unsafeSlice (U.unsafeIndex off g) (U.unsafeIndex szs g) flat))
 
--- 辺の並びを (u, v, d) に直す。幅 2 なら d = 0。
+-- | 辺の並びを (u, v, d) に直す。幅 2 なら d = 0。
 ufEdges :: (G.Vector u Int) => String -> Int -> ZeroBased (Grid u Int) -> [(Int, Int, Int)]
 ufEdges name w (ZeroBased (Grid gw h d))
   | gw /= w = error ("Atc.UnionFind." ++ name ++ ": 幅は " ++ show w)

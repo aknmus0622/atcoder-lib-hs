@@ -21,8 +21,16 @@ import Data.Bits (countTrailingZeros, shiftL, shiftR, xor, (.&.))
 import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector.Unboxed.Mutable as UM
 
--- | 法 @p@ での畳み込み。値は @0@ 以上 @p@ 未満で返る (入力は負でもよい)。
-convolveMod :: Int -> U.Vector Int -> U.Vector Int -> U.Vector Int
+-- | 法 @p@ での畳み込み。
+convolveMod ::
+  -- | @p@: 法 (NTT に向く素数)
+  Int ->
+  -- | @a@ (負でもよい)
+  U.Vector Int ->
+  -- | @b@ (負でもよい)
+  U.Vector Int ->
+  -- | @c_k = Σ_{i + j = k} a_i b_j mod p@ (@0@ 以上 @p@ 未満)
+  U.Vector Int
 convolveMod p as0 bs0
   | U.null as0 || U.null bs0 = U.empty
   | min n m <= 40 = naive
@@ -55,7 +63,14 @@ convolveMod p as0 bs0
       U.concatMap (\(i, a) -> U.imap (\j b -> (i + j, a * b `rem` p)) bs) (U.indexed as)
 
 -- | 'ModInt' どうしの畳み込み。法は NTT に向く素数 (998244353 など)。
-convolveMI :: (Modulus m) => U.Vector (ModInt m) -> U.Vector (ModInt m) -> U.Vector (ModInt m)
+convolveMI ::
+  (Modulus m) =>
+  -- | @a@
+  U.Vector (ModInt m) ->
+  -- | @b@
+  U.Vector (ModInt m) ->
+  -- | @c_k = Σ_{i + j = k} a_i b_j@
+  U.Vector (ModInt m)
 convolveMI as bs = U.map ModInt (convolveMod p (U.map (\(ModInt x) -> x) as) (U.map (\(ModInt x) -> x) bs))
   where
     p = modulusOf (proxyOf as)
@@ -63,9 +78,15 @@ convolveMI as bs = U.map ModInt (convolveMod p (U.map (\(ModInt x) -> x) as) (U.
     proxyOf :: U.Vector (ModInt m) -> ModInt m
     proxyOf _ = ModInt 0
 
--- | 法なしの畳み込み。結果の各値の絶対値が 2^63 未満なら正確 (入力は負でもよい)。
+-- | 法なしの畳み込み。結果の各値の絶対値が 2^63 未満なら正確。
 -- 3 つの法で計算して中国剰余定理で戻す。長さは 2^24 まで。
-convolveInt :: U.Vector Int -> U.Vector Int -> U.Vector Int
+convolveInt ::
+  -- | @a@ (負でもよい)
+  U.Vector Int ->
+  -- | @b@ (負でもよい)
+  U.Vector Int ->
+  -- | @c_k = Σ_{i + j = k} a_i b_j@
+  U.Vector Int
 convolveInt as bs
   | U.null as || U.null bs = U.empty
   | min (U.length as) (U.length bs) <= 40 =
@@ -98,7 +119,7 @@ primitiveRoot p
   where
     qs = primeFactorCounts (p - 1)
 
--- 長さが 2 冪の配列を、その場で数論変換する (inv なら逆変換して長さで割る)。
+-- | 長さが 2 冪の配列を、その場で数論変換する (inv なら逆変換して長さで割る)。
 -- 値は法 p の Montgomery 表現。g は原始根 (普通の表現)。
 ntt :: Mont -> Word -> Int -> Bool -> UM.MVector s Word -> ST s ()
 ntt mo p g inv a = do

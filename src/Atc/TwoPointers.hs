@@ -43,11 +43,16 @@ import qualified Data.Vector.Mutable as MV
 data Window a b
   = forall s.
     Window
-      (s -> a -> s) -- ^ 右端に要素を足す
-      (s -> a -> s) -- ^ 左端から要素を除く
-      (s -> Maybe b) -- ^ 満たすなら @Just 値@
-      !s -- ^ 空の窓の状態
+      -- | @add s x@: 状態 @s@ の窓の右端に要素 @x@ を足した状態
+      (s -> a -> s)
+      -- | @del s x@: 状態 @s@ の窓の左端から要素 @x@ を除いた状態
+      (s -> a -> s)
+      -- | @check s@: 状態 @s@ の窓が条件を満たすなら @Just 値@、満たさなければ 'Nothing'
+      (s -> Maybe b)
+      -- | 空の窓の状態
+      !s
 
+-- | 2 つの状態の正格な組 (@\<*\>@ で使う)。
 data P s t = P !s !t
 
 instance Functor (Window a) where
@@ -68,7 +73,13 @@ instance Applicative (Window a) where
 
 -- | 要素を変換してから窓に入れる。
 {-# INLINE premap #-}
-premap :: (a -> a') -> Window a' b -> Window a b
+premap ::
+  -- | @f x@: 元の要素 @x@ を窓が受け取る要素にする
+  (a -> a') ->
+  -- | 変換後の要素についての窓の条件
+  Window a' b ->
+  -- | 元の要素についての窓の条件
+  Window a b
 premap f (Window add del check s) = Window (\x -> add x . f) (\x -> del x . f) check s
 
 -- | 窓の長さ。常に満たす。
@@ -76,12 +87,12 @@ premap f (Window add del check s) = Window (\x -> add x . f) (\x -> del x . f) c
 lengthWindow :: Window a Int
 lengthWindow = Window (\n _ -> n + 1) (\n _ -> n - 1) Just 0
 
--- | 窓の和が @p@ を満たすか。値は和。
+-- | 窓の和 @s@ が @p s@ を満たすか。値は和。
 {-# INLINE sumIf #-}
 sumIf :: (Num a) => (a -> Bool) -> Window a a
 sumIf p = Window (+) (-) (\s -> if p s then Just s else Nothing) 0
 
--- | 窓の種類数が @p@ を満たすか。値は種類数。O(log n)。
+-- | 窓の種類数 @k@ が @p k@ を満たすか。値は種類数。O(log n)。
 {-# INLINE distinctIf #-}
 distinctIf :: (Int -> Bool) -> Window Int Int
 distinctIf p = Window add del check (P IntMapS.empty 0)
@@ -98,16 +109,30 @@ distinctIf p = Window add del check (P IntMapS.empty 0)
 -- | 各 @l@ について、@l@ から始まる最長の窓の値。
 -- 足す・判定は高々 @2n@ 回、除くは @n@ 回、除いた後の判定が @n@ 回。
 {-# INLINE slideWindow #-}
-slideWindow :: (G.Vector v a) => Window a b -> v a -> V.Vector (Maybe b)
+slideWindow ::
+  (G.Vector v a) =>
+  -- | 窓の条件
+  Window a b ->
+  -- | 要素の列 (長さ @n@)
+  v a ->
+  -- | 第 @l@ 要素は @l@ から始まる最長の窓の値 (@[l, l + 1)@ も満たさなければ 'Nothing')
+  V.Vector (Maybe b)
 slideWindow = slideCore False
 
 -- | 'slideWindow' の正格版。値は書き込み時に WHNF まで評価する
 -- (タプルの中身までは評価しないので、要るなら @fmap@ で正格な型にする)。
 {-# INLINE slideWindow' #-}
-slideWindow' :: (G.Vector v a) => Window a b -> v a -> V.Vector (Maybe b)
+slideWindow' ::
+  (G.Vector v a) =>
+  -- | 窓の条件
+  Window a b ->
+  -- | 要素の列 (長さ @n@)
+  v a ->
+  -- | 第 @l@ 要素は @l@ から始まる最長の窓の値 (@[l, l + 1)@ も満たさなければ 'Nothing')
+  V.Vector (Maybe b)
 slideWindow' = slideCore True
 
--- 第 1 引数が True なら値を WHNF まで評価してから書き込む。
+-- | 'slideWindow' / 'slideWindow'' の本体。第 1 引数が True なら値を WHNF まで評価してから書き込む。
 {-# INLINE slideCore #-}
 slideCore :: (G.Vector v a) => Bool -> Window a b -> v a -> V.Vector (Maybe b)
 slideCore strict (Window add del check s0) xs = runST $ do

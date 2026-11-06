@@ -3,6 +3,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 
+-- | 入出力: 1 語を読む型 ('Parsable') と、グリッドの読み書き。
 module Atc.IO where
 
 import Atc.Grid (CanHold, Grid (..), GridKind, MGrid (..), toRows)
@@ -18,7 +19,9 @@ import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector.Unboxed.Mutable as UM
 import System.IO (stdout)
 
+-- | 1 語の 'C.ByteString' から読める型。
 class Parsable a where
+  -- | 1 語を読む。読めなければ 'error'。
   readBS :: C.ByteString -> a
 
 instance Parsable Int where
@@ -52,7 +55,17 @@ instance Parsable String where
 
 -- | 読んだ行を、不変版 (@Grid v@) か可変版 (@MGrid v IO@) に入れる。
 class (GridKind k) => GridInput k where
-  fromUnboxed :: (U.Unbox a, CanHold k a) => Int -> Int -> U.Vector a -> IO (k a)
+  -- | 読んだ中身からグリッドを作る。
+  fromUnboxed ::
+    (U.Unbox a, CanHold k a) =>
+    -- | @w@: 幅
+    Int ->
+    -- | @h@: 高さ
+    Int ->
+    -- | @d@: 行優先に並んだ中身 (長さ @w * h@)
+    U.Vector a ->
+    -- | 幅 @w@ 高さ @h@ のグリッド
+    IO (k a)
 
 instance GridInput (Grid v) where
   fromUnboxed w h = pure . Grid w h . G.convert
@@ -61,35 +74,109 @@ instance (m ~ IO) => GridInput (MGrid v m) where
   fromUnboxed w h d = MGrid w h <$> GM.generate (U.length d) (U.unsafeIndex d)
 
 -- | 空白区切りの整数が @w@ 個ずつ並んだ行を @h@ 行読む。
-getIntGrid :: (GridInput k, CanHold k Int) => Int -> Int -> IO (k Int)
+getIntGrid ::
+  (GridInput k, CanHold k Int) =>
+  -- | @w@: 幅 (1 行の個数)
+  Int ->
+  -- | @h@: 高さ (読む行数)
+  Int ->
+  -- | 読んだグリッド
+  IO (k Int)
 getIntGrid w h = fromUnboxed w h . U.concat =<< mapM (const getRow) [1 .. h]
   where
     getRow = U.unfoldrExactN w (fromJust . C.readInt . C.dropWhile isSpace) <$> C.getLine
 
 -- | @#.#@ のような、区切りなしの文字が @w@ 個ずつ並んだ行を @h@ 行読む。
-getCharGrid :: (GridInput k, CanHold k Char) => Int -> Int -> IO (k Char)
+getCharGrid ::
+  (GridInput k, CanHold k Char) =>
+  -- | @w@: 幅 (1 行の文字数)
+  Int ->
+  -- | @h@: 高さ (読む行数)
+  Int ->
+  -- | 読んだグリッド
+  IO (k Char)
 getCharGrid w h = fromUnboxed w h . U.concat =<< mapM (const getRow) [1 .. h]
   where
     getRow = (\line -> U.generate w (C.index line)) <$> C.getLine
 
--- 'getIntGrid' の型を決めたもの。
-getIntGridU :: Int -> Int -> IO (Grid U.Vector Int)
+-- | 'getIntGrid' の型を決めたもの (@U.Vector@)。
+getIntGridU ::
+  -- | @w@: 幅 (1 行の個数)
+  Int ->
+  -- | @h@: 高さ (読む行数)
+  Int ->
+  -- | 読んだグリッド
+  IO (Grid U.Vector Int)
 getIntGridU = getIntGrid
-getIntGridV :: Int -> Int -> IO (Grid V.Vector Int)
+
+-- | 'getIntGrid' の型を決めたもの (@V.Vector@)。
+getIntGridV ::
+  -- | @w@: 幅 (1 行の個数)
+  Int ->
+  -- | @h@: 高さ (読む行数)
+  Int ->
+  -- | 読んだグリッド
+  IO (Grid V.Vector Int)
 getIntGridV = getIntGrid
-getIntGridUM :: Int -> Int -> IO (MGrid UM.MVector IO Int)
+
+-- | 'getIntGrid' の型を決めたもの (@UM.MVector@)。
+getIntGridUM ::
+  -- | @w@: 幅 (1 行の個数)
+  Int ->
+  -- | @h@: 高さ (読む行数)
+  Int ->
+  -- | 読んだグリッド
+  IO (MGrid UM.MVector IO Int)
 getIntGridUM = getIntGrid
-getIntGridMV :: Int -> Int -> IO (MGrid MV.MVector IO Int)
+
+-- | 'getIntGrid' の型を決めたもの (@MV.MVector@)。
+getIntGridMV ::
+  -- | @w@: 幅 (1 行の個数)
+  Int ->
+  -- | @h@: 高さ (読む行数)
+  Int ->
+  -- | 読んだグリッド
+  IO (MGrid MV.MVector IO Int)
 getIntGridMV = getIntGrid
 
--- 'getCharGrid' の型を決めたもの。
-getCharGridU :: Int -> Int -> IO (Grid U.Vector Char)
+-- | 'getCharGrid' の型を決めたもの (@U.Vector@)。
+getCharGridU ::
+  -- | @w@: 幅 (1 行の文字数)
+  Int ->
+  -- | @h@: 高さ (読む行数)
+  Int ->
+  -- | 読んだグリッド
+  IO (Grid U.Vector Char)
 getCharGridU = getCharGrid
-getCharGridV :: Int -> Int -> IO (Grid V.Vector Char)
+
+-- | 'getCharGrid' の型を決めたもの (@V.Vector@)。
+getCharGridV ::
+  -- | @w@: 幅 (1 行の文字数)
+  Int ->
+  -- | @h@: 高さ (読む行数)
+  Int ->
+  -- | 読んだグリッド
+  IO (Grid V.Vector Char)
 getCharGridV = getCharGrid
-getCharGridUM :: Int -> Int -> IO (MGrid UM.MVector IO Char)
+
+-- | 'getCharGrid' の型を決めたもの (@UM.MVector@)。
+getCharGridUM ::
+  -- | @w@: 幅 (1 行の文字数)
+  Int ->
+  -- | @h@: 高さ (読む行数)
+  Int ->
+  -- | 読んだグリッド
+  IO (MGrid UM.MVector IO Char)
 getCharGridUM = getCharGrid
-getCharGridMV :: Int -> Int -> IO (MGrid MV.MVector IO Char)
+
+-- | 'getCharGrid' の型を決めたもの (@MV.MVector@)。
+getCharGridMV ::
+  -- | @w@: 幅 (1 行の文字数)
+  Int ->
+  -- | @h@: 高さ (読む行数)
+  Int ->
+  -- | 読んだグリッド
+  IO (MGrid MV.MVector IO Char)
 getCharGridMV = getCharGrid
 
 -- | 1 行ずつ、空白区切りで出力する。

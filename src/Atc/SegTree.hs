@@ -34,11 +34,9 @@
 -- > t <- buildSG (+) 0 =<< U.freeze mv                 -- mv をこの後も使う
 -- > t <- buildSG (+) 0 =<< U.unsafeFreeze mv           -- mv をこの後は使わない (凍らせるコピーが要らない)
 --
--- 'buildLazySG' の引数は順に、値の演算、単位元、作用のかけ方 @act f x@、
--- 作用の合成 @comp f g@ (「g の後に f」。新しい作用が左)、何もしない作用。
+-- 'buildLazySG' の引数 (値の演算と単位元、作用のかけ方・合成・何もしない作用) の意味と
+-- 単位元の注意は 'buildLazySG' の引数の説明にある。
 -- 渡した演算が条件 (下の「作用」の節) を満たすかは確かめない。
--- 単位元に作用がかかることがあるので、遅延版の単位元は 'maxBound' のような端の値ではなく、
--- 足しても溢れない値 (@10 ^ 18@ など) にする (Atc.Graph の @inf@ は maxBound なので使わない)。
 --
 -- base の 'Monoid' ('Sum' / 'Min' / 'Max' / 'First' / 'Last' / 'Dual' やそのタプル) を
 -- 使うときは @(<>)@ と 'mempty' を渡す。遅延版で 'ActSG' の作用を使うときは 'actSG' も渡す。
@@ -66,8 +64,7 @@
 --
 -- == 二分探索
 --
--- 'maxRightSG' / 'minLeftSG' の @p@ は単位元で真で、区間を伸ばすと真から偽に
--- 1 回だけ切り替わること (単位元で偽ならエラー)。
+-- 'maxRightSG' / 'minLeftSG' に渡す @p@ の条件は、それぞれの引数の説明にある。
 --
 -- > maxRightSG l (<= k) t      -- 区間和の木で、l から和が k 以下で伸ばせる右端 (r は含まない)
 -- > minLeftSG r (>= x) t       -- 区間最小の木で、r の手前から最小が x 以上で伸ばせる左端
@@ -191,10 +188,17 @@ import Data.Vector.Unboxed (MVector, Vector)
 -- ---------------------------------------------------------------------
 -- 作用
 
--- | 作用 @f@ を値 @a@ にかける。満たすべき条件はモジュールの説明を参照。
+-- | 作用 @f@ を値 @a@ にかけられる型の組。満たすべき条件はモジュールの説明を参照。
 -- 'buildLazySG' に @(<>) mempty actSG (<>) mempty@ と渡して使う。
 class (Monoid f, Monoid a) => ActSG f a where
-  actSG :: f -> a -> a
+  -- | 作用を値にかける。
+  actSG ::
+    -- | 作用
+    f ->
+    -- | 値
+    a ->
+    -- | 作用をかけた値
+    a
 
 -- | 通常のセグ木の作用 (何もしない)。
 instance (Monoid a) => ActSG () a where
@@ -205,41 +209,79 @@ instance (Monoid a) => ActSG () a where
 -- 本体
 
 -- | セグメント木。葉の数を 2 冪 @sizeSG@ にそろえ、@[sizeSG, sizeSG + n)@ に値を置く。
--- 遅延版でなければ作用の配列は空。演算は作るときに渡したものを持つ。
+-- 演算は作るときに渡したものを持つ。
 data SegTree m v a f = SegTree
-  { lengthSG :: !Int
-  , logSG :: !Int
-  , sizeSG :: !Int
-  , isLazySG :: !Bool
-  , nodesSG :: !(G.Mutable v (PrimState m) a)
-  , lazySG :: !(G.Mutable v (PrimState m) f)
-  , opSG :: a -> a -> a
-  , unitSG :: a
-  , actOpSG :: f -> a -> a
-  , composeSG :: f -> f -> f
-  , idActSG :: f
+  { -- | 要素数 n
+    lengthSG :: !Int
+  , -- | @sizeSG = 2 ^ logSG@
+    logSG :: !Int
+  , -- | 葉の数 (n 以上の最小の 2 冪)
+    sizeSG :: !Int
+  , -- | 遅延版か (偽なら作用を溜めず、流す処理も飛ばす)
+    isLazySG :: !Bool
+  , -- | 節点の値 (長さ @2 sizeSG@。根が 1、節点 @k@ の子が @2k@ と @2k+1@)
+    nodesSG :: !(G.Mutable v (PrimState m) a)
+  , -- | 節点に溜めた作用 (長さ @sizeSG@。遅延版でなければ空)
+    lazySG :: !(G.Mutable v (PrimState m) f)
+  , -- | 値の演算 @op@
+    opSG :: a -> a -> a
+  , -- | @op@ の単位元
+    unitSG :: a
+  , -- | 作用のかけ方 @act f x@
+    actOpSG :: f -> a -> a
+  , -- | 作用の合成 @comp f g@ (「@g@ の後に @f@」)
+    composeSG :: f -> f -> f
+  , -- | 何もしない作用
+    idActSG :: f
   }
 
--- | @buildSG op e xs@: 演算 @op@ と単位元 @e@ を渡して通常のセグ木を作る。O(n)。
+-- | 演算と単位元を渡して通常のセグ木を作る。O(n)。
 {-# INLINE buildSG #-}
-buildSG :: (PrimMonad m, G.Vector v a, G.Vector v ()) => (a -> a -> a) -> a -> v a -> m (SegTree m v a ())
+buildSG ::
+  (PrimMonad m, G.Vector v a, G.Vector v ()) =>
+  -- | @op x y@: 値の演算 (結合的。可換でなくてよい)
+  (a -> a -> a) ->
+  -- | @e@: @op@ の単位元
+  a ->
+  -- | @xs@: 初めの値 (長さ n。中身は木の配列にコピーする)
+  v a ->
+  -- | セグ木 (作用は ())
+  m (SegTree m v a ())
 buildSG op e = buildCoreSG False op e (\_ x -> x) (\_ _ -> ()) ()
 
--- | @buildLazySG op e act comp idf xs@: 演算と作用を渡して遅延セグ木を作る。O(n)。
---
--- * @op@ / @e@: 値の演算と単位元
--- * @act f x@: 作用 @f@ を値 @x@ にかける
--- * @comp f g@: 「@g@ の後に @f@」をかける作用 (新しい作用が左)
--- * @idf@: 何もしない作用
+-- | 演算と作用を渡して遅延セグ木を作る。O(n)。
 {-# INLINE buildLazySG #-}
 buildLazySG ::
   (PrimMonad m, G.Vector v a, G.Vector v f) =>
-  (a -> a -> a) -> a -> (f -> a -> a) -> (f -> f -> f) -> f -> v a -> m (SegTree m v a f)
+  -- | @op x y@: 値の演算 (結合的。可換でなくてよい)
+  (a -> a -> a) ->
+  -- | @e@: @op@ の単位元。単位元に作用がかかることがあるので、'maxBound' のような端の値ではなく、
+  -- 足しても溢れない値 (@10 ^ 18@ など) にする (Atc.Graph の @inf@ は maxBound なので使わない)
+  a ->
+  -- | @act f x@: 作用 @f@ を値 @x@ にかけた値
+  (f -> a -> a) ->
+  -- | @comp f g@: 「@g@ の後に @f@」をかける作用 (新しい作用が左)
+  (f -> f -> f) ->
+  -- | @idf@: 何もしない作用
+  f ->
+  -- | @xs@: 初めの値 (長さ n。中身は木の配列にコピーする)
+  v a ->
+  -- | 遅延セグ木
+  m (SegTree m v a f)
 buildLazySG = buildCoreSG True
 
--- | @[l, r)@ の集約。空なら単位元。O(log n)。
+-- | 区間の集約。O(log n)。
 {-# INLINE foldSG #-}
-foldSG :: (PrimMonad m, G.Vector v a, G.Vector v f) => Int -> Int -> SegTree m v a f -> m a
+foldSG ::
+  (PrimMonad m, G.Vector v a, G.Vector v f) =>
+  -- | @l@: 左端 (含む)
+  Int ->
+  -- | @r@: 右端 (含まない)。@0 <= l <= r <= n@
+  Int ->
+  -- | セグ木
+  SegTree m v a f ->
+  -- | @[l, r)@ の集約 (空なら単位元)
+  m a
 foldSG l r t
   | l < 0 || r > lengthSG t || l > r = error ("foldSG: 範囲外: " ++ show (l, r))
   | l == r = pure e
@@ -262,9 +304,18 @@ foldSG l r t
     op = opSG t
     e = unitSG t
 
--- | @i@ 番目を @g@ で書き換える。O(log n)。
+-- | 1 点を書き換える。O(log n)。
 {-# INLINE modifySG #-}
-modifySG :: (PrimMonad m, G.Vector v a, G.Vector v f) => Int -> (a -> a) -> SegTree m v a f -> m ()
+modifySG ::
+  (PrimMonad m, G.Vector v a, G.Vector v f) =>
+  -- | @i@: 書き換える位置
+  Int ->
+  -- | @g x@: 今の値 @x@ から新しい値を作る
+  (a -> a) ->
+  -- | セグ木
+  SegTree m v a f ->
+  -- | なし
+  m ()
 modifySG i g t
   | i < 0 || i >= lengthSG t = error ("modifySG: 範囲外: " ++ show i)
   | otherwise = do
@@ -276,9 +327,20 @@ modifySG i g t
       GM.unsafeWrite d k $! g x
       forM_ [1 .. logSG t] $ \s -> updateSG (k `shiftR` s) t
 
--- | @[l, r)@ に作用 @f@ をかける。通常のセグ木 (作用が ()) では何もしない。O(log n)。
+-- | 区間に作用をかける。通常のセグ木 (作用が ()) では何もしない。O(log n)。
 {-# INLINE applySG #-}
-applySG :: (PrimMonad m, G.Vector v a, G.Vector v f) => Int -> Int -> f -> SegTree m v a f -> m ()
+applySG ::
+  (PrimMonad m, G.Vector v a, G.Vector v f) =>
+  -- | @l@: 左端 (含む)
+  Int ->
+  -- | @r@: 右端 (含まない)。@0 <= l <= r <= n@
+  Int ->
+  -- | @f@: @[l, r)@ にかける作用
+  f ->
+  -- | セグ木
+  SegTree m v a f ->
+  -- | なし
+  m ()
 applySG l r f t
   | l < 0 || r > lengthSG t || l > r = error ("applySG: 範囲外: " ++ show (l, r))
   | l == r || not (isLazySG t) = pure ()
@@ -298,9 +360,19 @@ applySG l r f t
         when (((l0 `shiftR` s) `shiftL` s) /= l0) $ updateSG (l0 `shiftR` s) t
         when (((r0 `shiftR` s) `shiftL` s) /= r0) $ updateSG ((r0 - 1) `shiftR` s) t
 
--- | @maxRightSG l p t@: @p (fold [l, r))@ が真である最大の @r@。O(log n)。
+-- | 条件を満たすまま右へ伸ばせる右端を二分探索する。O(log n)。
 {-# INLINE maxRightSG #-}
-maxRightSG :: (PrimMonad m, G.Vector v a, G.Vector v f) => Int -> (a -> Bool) -> SegTree m v a f -> m Int
+maxRightSG ::
+  (PrimMonad m, G.Vector v a, G.Vector v f) =>
+  -- | @l@: 左端 (@0 <= l <= n@)
+  Int ->
+  -- | @p x@: 集約 @x@ についての条件。単位元で真で、区間を伸ばすと真から偽に
+  -- 1 回だけ切り替わること (単位元で偽ならエラー)
+  (a -> Bool) ->
+  -- | セグ木
+  SegTree m v a f ->
+  -- | @p (fold [l, r))@ が真である最大の @r@
+  m Int
 maxRightSG l p t
   | l < 0 || l > n = error ("maxRightSG: 範囲外: " ++ show l)
   | not (p (unitSG t)) = error "maxRightSG: p (単位元) が偽"
@@ -332,9 +404,19 @@ maxRightSG l p t
           let sm' = op sm x
           if p sm' then down (c + 1) sm' else down c sm
 
--- | @minLeftSG r p t@: @p (fold [l, r))@ が真である最小の @l@。O(log n)。
+-- | 条件を満たすまま左へ伸ばせる左端を二分探索する。O(log n)。
 {-# INLINE minLeftSG #-}
-minLeftSG :: (PrimMonad m, G.Vector v a, G.Vector v f) => Int -> (a -> Bool) -> SegTree m v a f -> m Int
+minLeftSG ::
+  (PrimMonad m, G.Vector v a, G.Vector v f) =>
+  -- | @r@: 右端 (含まない。@0 <= r <= n@)
+  Int ->
+  -- | @p x@: 集約 @x@ についての条件。単位元で真で、区間を伸ばすと真から偽に
+  -- 1 回だけ切り替わること (単位元で偽ならエラー)
+  (a -> Bool) ->
+  -- | セグ木
+  SegTree m v a f ->
+  -- | @p (fold [l, r))@ が真である最小の @l@
+  m Int
 minLeftSG r p t
   | r < 0 || r > lengthSG t = error ("minLeftSG: 範囲外: " ++ show r)
   | not (p (unitSG t)) = error "minLeftSG: p (単位元) が偽"
@@ -380,7 +462,10 @@ withLenSG = G.map (\x -> (Sum x, Sum 1))
 -- 用意してある値と作用
 
 -- | 区間 gcd の値。単位元は 0。
-newtype GcdSG a = GcdSG {getGcdSG :: a}
+newtype GcdSG a = GcdSG
+  { -- | 中身の値
+    getGcdSG :: a
+  }
   deriving (Eq, Ord, Show)
 
 instance (Integral a) => Semigroup (GcdSG a) where
@@ -392,7 +477,10 @@ instance (Integral a) => Monoid (GcdSG a) where
   mempty = GcdSG 0
 
 -- | 加算の作用。'Min' / 'Max' の単位元 ('maxBound' / 'minBound') には足さない。
-newtype AddSG a = AddSG {getAddSG :: a}
+newtype AddSG a = AddSG
+  { -- | 足す値
+    getAddSG :: a
+  }
   deriving (Eq, Ord, Show)
 
 instance (Num a) => Semigroup (AddSG a) where
@@ -420,7 +508,10 @@ instance (a ~ b, a ~ c, Num a) => ActSG (AddSG a) (Sum b, Sum c) where
   actSG (AddSG c) (Sum s, Sum len) = let !s' = s + c * len in (Sum s', Sum len)
 
 -- | 代入の作用。@SetSG Nothing@ が何もしない作用で、@f <> g@ では新しい @f@ が勝つ。
-newtype SetSG a = SetSG {getSetSG :: Maybe a}
+newtype SetSG a = SetSG
+  { -- | 代入する値 ('Nothing' なら何もしない)
+    getSetSG :: Maybe a
+  }
   deriving (Eq, Ord, Show)
 
 instance Semigroup (SetSG a) where
@@ -447,7 +538,12 @@ instance (a ~ b, a ~ c, Num a) => ActSG (SetSG a) (Sum b, Sum c) where
 
 -- | アフィン変換 @x ↦ b x + c@ の作用。@AffineSG b1 c1 <> AffineSG b2 c2@ は
 -- 2 を先にかけたもの。
-data AffineSG a = AffineSG !a !a
+data AffineSG a
+  = AffineSG
+      -- | @b@: 係数
+      !a
+      -- | @c@: 定数項
+      !a
   deriving (Eq, Ord, Show)
 
 instance (Num a) => Semigroup (AffineSG a) where
@@ -533,6 +629,7 @@ instance (U.Unbox a) => U.Unbox (AffineSG a)
 -- ---------------------------------------------------------------------
 -- 以下は内部用。
 
+-- | 'buildSG' / 'buildLazySG' の本体。@lazy@ が偽なら作用の配列を持たない。
 {-# INLINE buildCoreSG #-}
 buildCoreSG ::
   (PrimMonad m, G.Vector v a, G.Vector v f) =>
@@ -548,7 +645,7 @@ buildCoreSG lazy op e act comp idf xs = do
   forM_ [size - 1, size - 2 .. 1] $ \k -> updateSG k t
   pure t
 
--- 節点 k を子から作り直す。
+-- | 節点 k を子から作り直す。
 {-# INLINE updateSG #-}
 updateSG :: (PrimMonad m, G.Vector v a) => Int -> SegTree m v a f -> m ()
 updateSG k t = do
@@ -558,7 +655,7 @@ updateSG k t = do
   where
     d = nodesSG t
 
--- 節点 k に f をかけ、内部の節点なら f を溜める。
+-- | 節点 k に f をかけ、内部の節点なら f を溜める。
 -- 値は子を見ずに act f で直す (準同型の条件)。溜めた作用 g とは comp f g にまとめる
 -- (g の後に f。合成の条件)。葉は子がないので溜めない。
 {-# INLINE allApplySG #-}
@@ -570,7 +667,7 @@ allApplySG k f t = do
     g <- GM.unsafeRead (lazySG t) k
     GM.unsafeWrite (lazySG t) k $! composeSG t f g
 
--- 節点 k に溜めた作用を子に流し、溜めを何もしない作用 idf に戻す。
+-- | 節点 k に溜めた作用を子に流し、溜めを何もしない作用 idf に戻す。
 -- 節点 k の値は作用をかけた後のものなので、そのまま。
 {-# INLINE pushSG #-}
 pushSG :: (PrimMonad m, G.Vector v a, G.Vector v f) => Int -> SegTree m v a f -> m ()
@@ -580,7 +677,7 @@ pushSG k t = do
   allApplySG (2 * k + 1) f t
   GM.unsafeWrite (lazySG t) k $! idActSG t
 
--- 葉 l0 と r0 (r0 は含まない) の祖先に溜めた作用を、上から流す。遅延版でなければ何もしない。
+-- | 葉 l0 と r0 (r0 は含まない) の祖先に溜めた作用を、上から流す。遅延版でなければ何もしない。
 -- [l0, r0) を分けた節点の祖先は、両端の祖先のどれか。端がその段の区切りにちょうど
 -- 合う祖先 ((l0 >> s) << s == l0) はその端で区間に切られないので、流さなくてよい
 -- (もう一方の端で切られるなら、そちらの判定で流す)。

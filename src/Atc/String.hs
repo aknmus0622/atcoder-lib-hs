@@ -33,30 +33,35 @@ import qualified Data.Vector.Unboxed.Mutable as UM
 -- ---------------------------------------------------------------------
 -- ローリングハッシュ
 
--- | 接頭辞のハッシュ (長さ n + 1) と、基数の累乗 (長さ n + 1)。
-data RollingHash = RollingHash !(U.Vector Int) !(U.Vector Int)
+-- | ローリングハッシュの表 ('buildRH' で作る)。
+data RollingHash
+  = RollingHash
+      -- | 接頭辞のハッシュ (長さ n + 1)
+      !(U.Vector Int)
+      -- | 基数の累乗 (長さ n + 1)
+      !(U.Vector Int)
 
--- 法 2^61 - 1。
+-- | 法 2^61 - 1。
 rhMod :: Int
 rhMod = (1 `shiftL` 61) - 1
 
--- 基数。法より小さい適当な大きい数。
+-- | 基数。法より小さい適当な大きい数。
 rhBase :: Int
 rhBase = 1103515245 * 1000003 + 12345
 
--- 法 2^61 - 1 の積。2^61 ≡ 1 を使って割り算なしで余りを取る。
+-- | 法 2^61 - 1 の積。2^61 ≡ 1 を使って割り算なしで余りを取る。
 rhMul :: Int -> Int -> Int
 rhMul a b = rhReduce (fromIntegral ((hi `shiftL` 3) .|. (lo `shiftR` 61)) + fromIntegral (lo .&. fromIntegral rhMod))
   where
     (hi, lo) = mulHiLo (fromIntegral a) (fromIntegral b)
 {-# INLINE rhMul #-}
 
--- 2^62 未満の値を法の中に入れる。
+-- | 2^62 未満の値を法の中に入れる。
 rhReduce :: Int -> Int
 rhReduce x = let y = (x .&. rhMod) + (x `shiftR` 61) in if y >= rhMod then y - rhMod else y
 {-# INLINE rhReduce #-}
 
--- 要素を 1 以上 法 未満の値にする (0 を避ける)。
+-- | 要素を 1 以上 法 未満の値にする (0 を避ける)。
 rhCode :: (Enum a) => a -> Int
 rhCode x = fromEnum x `mod` (rhMod - 1) + 1
 {-# INLINE rhCode #-}
@@ -74,8 +79,16 @@ buildRH xs = RollingHash pre pw
 lengthRH :: RollingHash -> Int
 lengthRH (RollingHash pre _) = U.length pre - 1
 
--- | @[l, r)@ のハッシュ。@0 <= l <= r <= n@。O(1)。
-hashRH :: Int -> Int -> RollingHash -> Int
+-- | 部分列のハッシュ。O(1)。
+hashRH ::
+  -- | @l@: 左端 (含む)
+  Int ->
+  -- | @r@: 右端 (含まない)。@0 <= l <= r <= n@
+  Int ->
+  -- | 表
+  RollingHash ->
+  -- | @[l, r)@ のハッシュ
+  Int
 hashRH l r h@(RollingHash pre pw)
   | l < 0 || r < l || r > lengthRH h = error ("Atc.String.hashRH: 範囲外 [" ++ show l ++ ", " ++ show r ++ ")")
   | otherwise = rhReduce (U.unsafeIndex pre r + rhMod - rhMul (U.unsafeIndex pre l) (U.unsafeIndex pw (r - l)))
@@ -85,16 +98,34 @@ hashRH l r h@(RollingHash pre pw)
 hashOfRH :: (Enum a) => [a] -> Int
 hashOfRH = foldl (\h c -> rhReduce (rhMul h rhBase + rhCode c)) 0
 
--- | 連結のハッシュ: @s@ のハッシュ、@t@ のハッシュ、@t@ の長さから @s ++ t@ のハッシュ。O(log 長さ)。
-concatHashRH :: Int -> Int -> Int -> Int
+-- | 連結のハッシュ。O(log 長さ)。
+concatHashRH ::
+  -- | @hs@: @s@ のハッシュ
+  Int ->
+  -- | @ht@: @t@ のハッシュ
+  Int ->
+  -- | @lenT@: @t@ の長さ
+  Int ->
+  -- | @s ++ t@ のハッシュ
+  Int
 concatHashRH hs ht lenT = rhReduce (rhMul hs (rhPow rhBase lenT) + ht)
   where
     rhPow _ 0 = 1
     rhPow b e = let x = rhPow (rhMul b b) (e `div` 2) in if odd e then rhMul x b else x
 
--- | @h1@ の位置 @i@ から始まる部分と、@h2@ の位置 @j@ から始まる部分の共通接頭辞の長さ。
+-- | 2 つの位置から始まる部分の共通接頭辞の長さ。
 -- 同じ文字列どうしなら @h1@ と @h2@ に同じものを渡す。O(log n)。
-lcpRH :: Int -> Int -> RollingHash -> RollingHash -> Int
+lcpRH ::
+  -- | @i@: @h1@ 側の開始位置
+  Int ->
+  -- | @j@: @h2@ 側の開始位置
+  Int ->
+  -- | @h1@: 1 つ目の列の表
+  RollingHash ->
+  -- | @h2@: 2 つ目の列の表
+  RollingHash ->
+  -- | @h1@ の位置 @i@ から始まる部分と、@h2@ の位置 @j@ から始まる部分の共通接頭辞の長さ
+  Int
 lcpRH i j h1 h2 = go 0 (min (lengthRH h1 - i) (lengthRH h2 - j) + 1)
   where
     -- 長さ ok は一致、ng は不一致 (か範囲外)。
@@ -183,9 +214,15 @@ suffixArray s
         UM.unsafeWrite out p i
 {-# INLINE suffixArray #-}
 
--- | LCP 配列 (Kasai 法): 長さ @n - 1@ で、@i@ 番目は接尾辞 @sa_i@ と @sa_{i+1}@ の
--- 共通接頭辞の長さ。@sa@ は 'suffixArray' の結果。O(n)。
-lcpArray :: (G.Vector v a, Eq a) => v a -> U.Vector Int -> U.Vector Int
+-- | LCP 配列 (Kasai 法)。O(n)。
+lcpArray ::
+  (G.Vector v a, Eq a) =>
+  -- | @s@: 列
+  v a ->
+  -- | @sa@: @s@ の 'suffixArray' の結果
+  U.Vector Int ->
+  -- | 長さ @n - 1@ で、@i@ 番目は接尾辞 @sa_i@ と @sa_{i+1}@ の共通接頭辞の長さ
+  U.Vector Int
 lcpArray s sa
   | n <= 1 = U.empty
   | otherwise = U.create $ do

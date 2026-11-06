@@ -17,11 +17,24 @@ import Data.Bits (countLeadingZeros, finiteBitSize, shiftL)
 import qualified Data.Vector as V
 import qualified Data.Vector.Generic as G
 
--- | 演算と、段ごとの表。@k@ 段目の @i@ 番目は @[i, i + 2^k)@ の結果。
-data SparseTable v a = SparseTable (a -> a -> a) !(V.Vector (v a))
+-- | Sparse Table ('buildSPT' で作る)。
+data SparseTable v a
+  = SparseTable
+      -- | 演算
+      (a -> a -> a)
+      -- | 段ごとの表。@k@ 段目の @i@ 番目は @[i, i + 2^k)@ の結果
+      !(V.Vector (v a))
 
 -- | 表を作る。O(n log n)。
-buildSPT :: forall v a. (G.Vector v a) => (a -> a -> a) -> v a -> SparseTable v a
+buildSPT ::
+  forall v a.
+  (G.Vector v a) =>
+  -- | @op x y@: 結合的で冪等 (@op x x = x@) な演算
+  (a -> a -> a) ->
+  -- | @xs@: 元の列
+  v a ->
+  -- | Sparse Table
+  SparseTable v a
 buildSPT op xs = SparseTable op (V.fromList (go 0 xs))
   where
     n = G.length xs
@@ -31,8 +44,17 @@ buildSPT op xs = SparseTable op (V.fromList (go 0 xs))
       | 2 `shiftL` k > n = [row]
       | otherwise = row : go (k + 1) (G.zipWith op row (G.drop (1 `shiftL` k) row))
 
--- | @[l, r)@ の結果。@0 <= l < r <= n@ (空の区間は 'error')。O(1)。
-foldSPT :: (G.Vector v a) => Int -> Int -> SparseTable v a -> a
+-- | 区間 @[l, r)@ を演算で畳む。@0 <= l < r <= n@ (空の区間は 'error')。O(1)。
+foldSPT ::
+  (G.Vector v a) =>
+  -- | @l@: 区間の左端 (含む)
+  Int ->
+  -- | @r@: 区間の右端 (含まない)
+  Int ->
+  -- | Sparse Table
+  SparseTable v a ->
+  -- | @op a_l .. a_{r-1}@ の結果
+  a
 foldSPT l r (SparseTable op tbl)
   | l < 0 || r <= l || r > G.length (V.head tbl) = error ("Atc.SparseTable.foldSPT: 範囲外か空 [" ++ show l ++ ", " ++ show r ++ ")")
   | otherwise = op (G.unsafeIndex row l) (G.unsafeIndex row (r - 1 `shiftL` k))
