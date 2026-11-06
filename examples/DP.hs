@@ -49,7 +49,7 @@ knapsack = do
       vs = U.fromList (map snd items)
       dp = pushDP ((0, 0), (n, w)) max [((0, 0), 0 :: Int)] $ \(i, c) x ->
         [(At (i + 1, c), x)]
-          ++ [(At (i + 1, c + ws U.! i), x + vs U.! i) | c + ws U.! i <= w]
+          ++ [(At (i + 1, c + ws U.! i), x + vs U.! i) | i < n, c + ws U.! i <= w]
   print (fromMaybe 0 (foldDP max ((n, 0), (n, w)) dp))
 
 -- | 経路の数を数える (壁ありの格子)。
@@ -149,6 +149,45 @@ spanPush = do
           dst <- [(At (i + 1, j), x), (Span (i + 1, j + l) (i + 1, min w (j + r)), x + v)]
         ]
   print (maybe (-1) id (dp (n, w)))
+
+-- | 経路の復元: ナップサック (EDPC D) で選んだ品物を出す。
+--
+-- 結果を組 @(dp, path)@ で受けると、@path k@ が始点から @k@ までのキーの並びになる
+-- ('DPResult')。隣り合う 2 つのキー @(i, c)@ → @(i + 1, c')@ で @c /= c'@ なら品物 @i@ を取った。
+-- 経路が意味を持つのは、まとめ方が 'max' / 'min' のように候補を選ぶ演算のとき。
+knapsackPath :: IO ()
+knapsackPath = do
+  [n, w] <- ints
+  items <- mapM (const ((\[a, b] -> (a, b)) <$> ints)) [1 .. n]
+  let ws = U.fromList (map fst items)
+      vs = U.fromList (map snd items)
+      (dp, path) = pushDP ((0, 0), (n, w)) max [((0, 0), 0 :: Int)] $ \(i, c) x ->
+        [(At (i + 1, c), x)]
+          ++ [(At (i + 1, c + ws U.! i), x + vs U.! i) | i < n, c + ws U.! i <= w]
+      -- 最後の行で値が最大のキー
+      goal = snd (maximum [(v, (n, c)) | c <- [0 .. w], Just v <- [dp (n, c)]])
+      taken = [i + 1 | ((i, a), (_, b)) <- zip (path goal) (drop 1 (path goal)), a /= b]
+  print (fromMaybe 0 (dp goal))
+  putStrLn (unwords (map show taken))
+
+-- | 経路の復元: 'Span' でもらう DP でも同じ (典型 037 で、料理ごとに使った量を出す)。
+--
+-- もらう DP の経路は、表を作り終えてから @path k@ を引いたときに逆にたどって求める
+-- (表を作る間は何も記録しないので、組で受けても遅くならない)。
+spanPullPath :: IO ()
+spanPullPath = do
+  [w, n] <- ints
+  items <- V.fromList <$> mapM (const ((\[l, r, v] -> (l, r, v)) <$> ints)) [1 .. n]
+  let (dp, path) = pullDP ((0, 0), (n, w)) max [((0, 0), 0 :: Int)] $ \(i, j) ->
+        [ src
+        | i > 0,
+          let (l, r, v) = items V.! (i - 1),
+          src <- [(At (i - 1, j), id), (Span (i - 1, max 0 (j - r)) (i - 1, j - l), (+ v))]
+        ]
+      -- 料理 i で使った量 (0 なら使わない)
+      used = [b - a | ((_, a), (_, b)) <- zip (path (n, w)) (drop 1 (path (n, w)))]
+  print (maybe (-1) id (dp (n, w)))
+  putStrLn (unwords (map show used))
 
 -- | 区間 DP: キーを @(長さ, 左端)@ にする。
 --

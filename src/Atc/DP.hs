@@ -1,7 +1,11 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 -- | 配列の DP。もらう DP は 'pullDP'、くばる DP は 'pushDP'。
 --
@@ -28,6 +32,10 @@
 -- >   [ src | i > 0, let (l, r, v) = items V.! (i - 1)
 -- >         , src <- [(At (i - 1, j), id), (Span (i - 1, max 0 (j - r)) (i - 1, j - l), (+ v))] ]
 -- >
+-- > -- 経路の復元: 結果を組で受ける (始点から k までのキーの並び)
+-- > let (dp, path) = pushDP ((0, 0), (n, w)) max [((0, 0), 0)] $ \(i, c) x -> ...
+-- > path (n, c)
+-- >
 -- > -- 自由な漸化式 (dp は前の状態を引く)
 -- > pullDPWith (0, n) $ \dp i -> if i == 0 then Just 1 else (\x -> 2 * x - ...) <$> dp (i - 1)
 --
@@ -43,6 +51,9 @@
 --   もらう DP の @g@ は @op@ に分配すること (@op (g x) (g y) = g (op x y)@)。
 --   区間を先にまとめてから @g@ を 1 回かけるため。@max@ と @(+ v)@、@(+)@ と @(* c)@ は満たす。
 -- * 'Span' が一度も出てこなければ区間用の木は作らない (点だけの DP は遅くならない)。
+-- * 経路の復元は、結果を @(dp, path)@ の組で受けたときだけ ('DPResult')。@op@ は
+--   'min' / 'max' のように候補を選ぶ演算で、値に 'Eq' が要る。関数のまま受ければ今までどおり
+--   (記録しないので遅くならない)。'pullDPWith' / 'pushDPWith' には無い。
 -- * 表は 'Int' / 'Bool' / 'Double' / 'Char' / @(Int, Int)@ / 'ModInt' なら U.Vector、
 --   ほかは V.Vector (書き込み時に WHNF まで評価する)。値の型が決まらないとコンパイルエラーになる。
 module Atc.DP where
@@ -52,7 +63,10 @@ import Control.Monad (foldM_, forM_, when)
 import Control.Monad.Primitive (unsafeInlineST)
 import Control.Monad.ST (ST, runST)
 import qualified Data.Foldable as F
+import Data.Int (Int32)
+import qualified Data.IntMap.Strict as IM
 import Data.Ix (Ix, inRange, range, rangeSize)
+import Data.Maybe (isJust, listToMaybe, mapMaybe)
 import Data.STRef (newSTRef, readSTRef, writeSTRef)
 import GHC.Ix (unsafeIndex)
 import qualified Data.Vector as V
@@ -72,7 +86,7 @@ data DPKeys k
 -- | もらう DP。各キーについて、もらう元のうち到達済みのものから値をもらって @op@ でまとめる。
 {-# INLINE pullDP #-}
 pullDP ::
-  (Ix k, DPValue a, F.Foldable t) =>
+  (Ix k, DPValue a, F.Foldable t, DPResult k a r) =>
   -- | @bnds@: キーの範囲 @(lo, hi)@
   (k, k) ->
   -- | @op@: もらった値どうしをまとめる演算 ('min' / 'max' / @(+)@ など)
@@ -85,11 +99,10 @@ pullDP ::
   -- 'Span' なら区間の到達済みの値を @op@ でまとめてから @g@ をかける。
   -- @src@ は @k@ より前であること (範囲外・到達していなければ飛ばす)
   (k -> t (DPKeys k, a -> a)) ->
-  -- | 引くキー
-  k ->
-  -- | そのキーの値 (到達していない・範囲外なら 'Nothing')
-  Maybe a
-pullDP bnds op starts f = withDPVector $ \asV -> runST $ do
+  -- | DP の表 @k -> Maybe a@ (到達していない・範囲外なら 'Nothing')。
+  -- 組 @(dp, path)@ で受けると経路の復元も付く ('DPResult')
+  r
+pullDP bnds op starts f = withDPVector $ \asV -> dpResult bnds $ \meq -> runST $ do
   t@(Table mv ms) <- newTable "pullDP" bnds [(k, mergeWith op x) | (k, x) <- starts]
   segRef <- newSTRef Nothing
   forKeys bnds $ \i k -> do
@@ -119,7 +132,12 @@ pullDP bnds op starts f = withDPVector $ \asV -> runST $ do
             F.forM_ mx $ \v -> update t i (mergeWith op (g v))
     -- i の値が決まったので、区間用の木があれば反映する。
     readSTRef segRef >>= F.mapM_ (\sg -> setAgg op sg t i)
-  freezeTable asV bnds t
+  (vals, seen) <- freezeRaw asV t
+  mseg <- readSTRef segRef >>= traverse freezeSeg
+  let path = case meq of
+        Nothing -> \_ _ -> []
+        Just eq -> pullPath bnds op starts f eq vals seen mseg
+  pure (frozenLookup bnds vals seen, path)
 
 -- | 自由な漸化式のもらう DP。
 {-# INLINE pullDPWith #-}
@@ -140,7 +158,7 @@ pullDPWith bnds f = withDPVector $ \asV ->
 -- | くばる DP。到達した状態から、送り先へ値を送って @op@ でまとめる。
 {-# INLINE pushDP #-}
 pushDP ::
-  (Ix k, DPValue a, F.Foldable t) =>
+  (Ix k, DPValue a, F.Foldable t, DPResult k a r) =>
   -- | @bnds@: キーの範囲 @(lo, hi)@
   (k, k) ->
   -- | @op@: 届いた値をまとめる演算。@op 今の値 c@ でまとめる (初めてならそのまま)
@@ -151,16 +169,17 @@ pushDP ::
   -- 送り先 @dst@ と送る値 @c@ ('Span' なら区間の全部へ)。
   -- @dst@ は @k@ より後ろであること (範囲外なら飛ばす)
   (k -> a -> t (DPKeys k, a)) ->
-  -- | 引くキー
-  k ->
-  -- | そのキーの値 (到達していない・範囲外なら 'Nothing')
-  Maybe a
-pushDP bnds op starts f = withDPVector $ \asV -> runST $ do
+  -- | DP の表 @k -> Maybe a@ (到達していない・範囲外なら 'Nothing')。
+  -- 組 @(dp, path)@ で受けると経路の復元も付く ('DPResult')
+  r
+pushDP bnds op starts f = withDPVector $ \asV -> dpResult bnds $ \meq -> runST $ do
   t@(Table mv ms) <- newTable "pushDP" bnds [(k, mergeWith op x) | (k, x) <- starts]
+  -- 経路を復元するときだけ、親 (送り元の通し番号、始点は -1) を記録する。
+  par <- UM.replicate (if isJust meq then rangeSize bnds else 0) (-1)
   segRef <- newSTRef Nothing
   forKeys bnds $ \i k -> do
     -- 区間で送られてきた値を、読む前に受け取る。
-    readSTRef segRef >>= F.mapM_ (\sg -> collectTags op sg t i)
+    readSTRef segRef >>= F.mapM_ (\sg -> collectTags op meq sg t par i)
     s <- UM.unsafeRead ms i
     when s $ do
       x <- GM.unsafeRead mv i
@@ -169,7 +188,7 @@ pushDP bnds op starts f = withDPVector $ \asV -> runST $ do
           when (inRange bnds k') $ do
             let j = unsafeIndex bnds k'
             when (j <= i) $ error "pushDP: 送り先が今のキー以前"
-            update t j (mergeWith op c)
+            updateFrom op meq t par j c (fromIntegral i)
         Span lo hi ->
           when (inRange bnds lo && inRange bnds hi) $ do
             let l = unsafeIndex bnds lo
@@ -180,11 +199,23 @@ pushDP bnds op starts f = withDPVector $ \asV -> runST $ do
                 readSTRef segRef >>= \m -> case m of
                   Just sg -> pure sg
                   Nothing -> do
-                    sg <- newSeg (rangeSize bnds)
+                    sg <- newTagSeg (isJust meq) (rangeSize bnds)
                     writeSTRef segRef (Just sg)
                     pure sg
-              sendTags op sg l r c
-  freezeTable asV bnds t
+              sendTags op meq sg l r c (fromIntegral i)
+  (vals, seen) <- freezeRaw asV t
+  parF <- U.unsafeFreeze par
+  let path unidx goal
+        | not (inRange bnds goal) = []
+        | not (U.unsafeIndex seen g0) = []
+        | otherwise = go g0 []
+        where
+          g0 = unsafeIndex bnds goal
+          go j acc =
+            let acc' = unidx j : acc
+                p = U.unsafeIndex parF j
+             in if p < 0 then acc' else go (fromIntegral p) acc'
+  pure (frozenLookup bnds vals seen, path)
 
 -- | 自由に更新するくばる DP。
 {-# INLINE pushDPWith #-}
@@ -260,6 +291,64 @@ instance {-# OVERLAPPABLE #-} DPValue a where
   {-# INLINE withDPVector #-}
   withDPVector k = k (id :: V.Vector a -> V.Vector a)
 
+-- | 'pullDP' / 'pushDP' の結果の受け取り方。結果を受ける型で決まる。
+--
+-- * @k -> Maybe a@ (関数のまま使う): DP の表だけ。経路のための記録はしない。
+-- * @(k -> Maybe a, k -> [k])@ (組で受ける): DP の表と、経路の復元
+--   (@path k@ は始点から @k@ までのキーの並び。到達していない・範囲外なら @[]@)。
+--   値に 'Eq' が要る。
+--
+-- > let dp = pushDP bnds max starts f            -- 今までどおり
+-- > let (dp, path) = pushDP bnds max starts f    -- 経路も
+--
+-- 経路は、@op@ が候補のどちらかを選ぶ演算 ('min' / 'max' など) のときだけ意味がある。
+-- 値が同じ候補があれば、先に来たもの (始点、'range' の順で前のもの、並びの前のもの) を選ぶ。
+--
+-- * 'pullDP' は表を作る間は何も記録せず、@path k@ を引いたときに @k@ から逆にたどる
+--   (@f k@ のもらう元のうち @g (dp src) == dp k@ のものへ戻る)。追加のメモリは無く、
+--   時間は経路の長さ × もらう元の数 × O(log n)。@op@ が値を選ぶ演算でないと
+--   戻る先が見つからずエラーになる。
+-- * 'pushDP' は送り先しか分からないので、組で受けたときだけ表を作りながら
+--   親 (Int32、状態 1 つにつき 4 バイト。'Span' があれば区間用の木にも同じだけ) を記録する。
+--   時間は経路の長さ。
+class DPResult k a r where
+  -- | @run meq@ が表と経路を返す (@meq@ は経路が要るときの値の比較)。
+  -- 経路は通し番号をキーに戻す関数を受け取る。
+  dpResult :: (k, k) -> (Maybe (a -> a -> Bool) -> (k -> Maybe a, (Int -> k) -> k -> [k])) -> r
+
+instance (k' ~ k, m ~ Maybe a) => DPResult k a (k' -> m) where
+  {-# INLINE dpResult #-}
+  dpResult _ run = fst (run Nothing)
+
+instance (f1 ~ (k -> Maybe a), f2 ~ (k -> [k]), Eq a, DPKey k) => DPResult k a (f1, f2) where
+  {-# INLINE dpResult #-}
+  dpResult bnds run = let (dp, path) = run (Just (==)) in (dp, path (unindexer bnds))
+
+-- | 通し番号 ('Ix' の 'unsafeIndex') からキーに戻す。経路の復元で使う。
+-- 'Int' / @(Int, Int)@ / @(Int, Int, Int)@ は計算で戻し、ほかは 'range' の表を作って引く。
+class (Ix k) => DPKey k where
+  -- | @unindexer bnds i@: 範囲 @bnds@ で通し番号 @i@ のキー
+  unindexer :: (k, k) -> Int -> k
+
+instance {-# OVERLAPPING #-} DPKey Int where
+  {-# INLINE unindexer #-}
+  unindexer (l, _) i = l + i
+
+instance {-# OVERLAPPING #-} DPKey (Int, Int) where
+  {-# INLINE unindexer #-}
+  unindexer ((l1, l2), (_, h2)) i =
+    let (q, r) = i `quotRem` (h2 - l2 + 1) in (l1 + q, l2 + r)
+
+instance {-# OVERLAPPING #-} DPKey (Int, Int, Int) where
+  {-# INLINE unindexer #-}
+  unindexer ((l1, l2, l3), (_, h2, h3)) i =
+    let (q, c) = i `quotRem` (h3 - l3 + 1)
+        (a, b) = q `quotRem` (h2 - l2 + 1)
+     in (l1 + a, l2 + b, l3 + c)
+
+instance {-# OVERLAPPABLE #-} (Ix k) => DPKey k where
+  unindexer bnds = let ks = V.fromList (range bnds) in V.unsafeIndex ks
+
 -- | 今の値があれば op でまとめ、なければ c。
 {-# INLINE mergeWith #-}
 mergeWith :: (a -> a -> a) -> a -> Maybe a -> a
@@ -309,13 +398,19 @@ update (Table mv ms) i g = do
 -- | 表を固めて、キーから値を引く関数にする。
 {-# INLINE freezeTable #-}
 freezeTable :: (G.Vector v a, Ix k) => (v a -> v a) -> (k, k) -> Table v s a -> ST s (k -> Maybe a)
-freezeTable asV bnds (Table mv ms) = do
-  vals <- asV <$> G.unsafeFreeze mv
-  seen <- U.unsafeFreeze ms
-  pure $ \k ->
-    if inRange bnds k
-      then let i = unsafeIndex bnds k in if U.unsafeIndex seen i then Just (G.unsafeIndex vals i) else Nothing
-      else Nothing
+freezeTable asV bnds t = uncurry (frozenLookup bnds) <$> freezeRaw asV t
+
+-- | 表を固める (値と到達済みフラグ)。
+{-# INLINE freezeRaw #-}
+freezeRaw :: (G.Vector v a) => (v a -> v a) -> Table v s a -> ST s (v a, U.Vector Bool)
+freezeRaw asV (Table mv ms) = (,) <$> (asV <$> G.unsafeFreeze mv) <*> U.unsafeFreeze ms
+
+-- | 固めた表からキーで引く。
+{-# INLINE frozenLookup #-}
+frozenLookup :: (G.Vector v a, Ix k) => (k, k) -> v a -> U.Vector Bool -> k -> Maybe a
+frozenLookup bnds vals seen k
+  | inRange bnds k = let i = unsafeIndex bnds k in if U.unsafeIndex seen i then Just (G.unsafeIndex vals i) else Nothing
+  | otherwise = Nothing
 
 -- | 範囲のキーを 'range' の順に、通し番号と一緒に回す。
 -- range のリストは foldM_ と融合する (自前の再帰にすると遅くなる)。
@@ -472,28 +567,150 @@ queryAgg op (Seg sv sf sz) l0 r0 = go (l0 + sz) (r0 + sz + 1) False unused False
               else pure (hr, vr)
           go ((l + 1) `div` 2) (r `div` 2) hl' vl' hr' vr'
 
--- | くばる DP: 通し番号 [l, r] に c を送る (区間を覆う節点に貯める)。
+-- | くばる DP で 'Span' の送り先を貯める木。経路を復元するときは、節点ごとに
+-- 貯めた値の送り元 (通し番号) も持つ (しないときは長さ 0)。
+data TagSeg v s a = TagSeg !(Seg v s a) !(UM.MVector s Int32)
+
+{-# INLINE newTagSeg #-}
+newTagSeg :: (G.Vector v a) => Bool -> Int -> ST s (TagSeg v s a)
+newTagSeg rec n = do
+  sg@(Seg _ _ sz) <- newSeg n
+  TagSeg sg <$> UM.replicate (if rec then 2 * sz else 0) (-1)
+
+-- | 値 @c@ (送り元 @src@) を、今の値に @op@ でまとめる。経路を復元するとき
+-- (@meq@ が 'Just') は、値が変わったら送り元を書き換える (同じなら先のものを残す)。
+-- 表と木の節点で共通に使うため、読み書きを受け取る。
+{-# INLINE mergeFrom #-}
+mergeFrom ::
+  (a -> a -> a) -> Maybe (a -> a -> Bool) -> ST s (Maybe a) -> (a -> ST s ()) -> (Int32 -> ST s ()) -> a -> Int32 -> ST s ()
+mergeFrom op meq rd wr wsrc c src = do
+  m <- rd
+  case m of
+    Nothing -> wr c >> when (isJust meq) (wsrc src)
+    Just old -> do
+      let !new = op old c
+      wr new
+      case meq of
+        Just eq | not (eq new old) -> wsrc src
+        _ -> pure ()
+
+-- | 表の通し番号 @j@ に、送り元 @src@ からの値 @c@ をまとめる。
+{-# INLINE updateFrom #-}
+updateFrom ::
+  (G.Vector v a) => (a -> a -> a) -> Maybe (a -> a -> Bool) -> Table v s a -> UM.MVector s Int32 -> Int -> a -> Int32 -> ST s ()
+updateFrom op meq t@(Table mv ms) par j =
+  mergeFrom op meq (readTable t j) (\x -> UM.unsafeWrite ms j True >> (GM.unsafeWrite mv j $! x)) (UM.unsafeWrite par j)
+
+-- | 木の節点 @p@ に、送り元 @src@ からの値 @c@ をまとめる。
+{-# INLINE addTag #-}
+addTag :: (G.Vector v a) => (a -> a -> a) -> Maybe (a -> a -> Bool) -> TagSeg v s a -> Int -> a -> Int32 -> ST s ()
+addTag op meq (TagSeg sg srcs) p =
+  mergeFrom op meq (readSeg sg p) (writeSeg sg p . Just) (UM.unsafeWrite srcs p)
+
+-- | くばる DP: 通し番号 [l, r] に c (送り元 src) を送る (区間を覆う節点に貯める)。
 {-# INLINE sendTags #-}
-sendTags :: (G.Vector v a) => (a -> a -> a) -> Seg v s a -> Int -> Int -> a -> ST s ()
-sendTags op sg@(Seg _ _ sz) l0 r0 c = go (l0 + sz) (r0 + sz + 1)
+sendTags :: (G.Vector v a) => (a -> a -> a) -> Maybe (a -> a -> Bool) -> TagSeg v s a -> Int -> Int -> a -> Int32 -> ST s ()
+sendTags op meq tg@(TagSeg (Seg _ _ sz) _) l0 r0 c src = go (l0 + sz) (r0 + sz + 1)
   where
-    add p = readSeg sg p >>= writeSeg sg p . Just . mergeWith op c
     go !l !r = when (l < r) $ do
-      when (odd l) $ add l
-      when (odd r) $ add (r - 1)
+      when (odd l) $ addTag op meq tg l c src
+      when (odd r) $ addTag op meq tg (r - 1) c src
       go ((l + 1) `div` 2) (r `div` 2)
 
 -- | くばる DP: 葉 i に届いた値を表の i にまとめる。
 -- 節点に値が送られるのは、その節点の左端より前のキーからだけなので、左端の葉を処理する時点で
 -- 節点の値は決まっている。そこで i が左端の節点を上から順に子へ押し下げる (各節点 1 回、均して O(1))。
+-- 経路を復元するときは、送り元も一緒に押し下げる。
 {-# INLINE collectTags #-}
-collectTags :: (G.Vector v a) => (a -> a -> a) -> Seg v s a -> Table v s a -> Int -> ST s ()
-collectTags op sg@(Seg _ _ sz) t i = do
+collectTags ::
+  (G.Vector v a) => (a -> a -> a) -> Maybe (a -> a -> Bool) -> TagSeg v s a -> Table v s a -> UM.MVector s Int32 -> Int -> ST s ()
+collectTags op meq tg@(TagSeg sg@(Seg _ _ sz) srcs) t par i = do
   let leaf = sz + i
       top = until odd (`div` 2) leaf
-      add p c = readSeg sg p >>= writeSeg sg p . Just . mergeWith op c
+      srcOf p = if isJust meq then UM.unsafeRead srcs p else pure (-1)
       down p = when (p < leaf) $ do
-        readSeg sg p >>= F.mapM_ (\c -> add (2 * p) c >> add (2 * p + 1) c)
+        readSeg sg p >>= F.mapM_ (\c -> do
+          s <- srcOf p
+          addTag op meq tg (2 * p) c s
+          addTag op meq tg (2 * p + 1) c s)
         down (2 * p)
   down top
-  readSeg sg leaf >>= F.mapM_ (update t i . mergeWith op)
+  readSeg sg leaf >>= F.mapM_ (\c -> srcOf leaf >>= updateFrom op meq t par i c)
+
+-- ---------------------------------------------------------------------
+-- もらう DP の経路の復元 (表を作り終えてから、引かれたときに逆にたどる)
+
+-- | 固めた 'Seg'。
+data FSeg v a = FSeg !(v a) !(U.Vector Bool) !Int
+
+{-# INLINE freezeSeg #-}
+freezeSeg :: (G.Vector v a) => Seg v s a -> ST s (FSeg v a)
+freezeSeg (Seg sv sf sz) = FSeg <$> G.unsafeFreeze sv <*> U.unsafeFreeze sf <*> pure sz
+
+-- | 通し番号 [l, r] を覆う節点 (左から順)。
+segNodes :: Int -> Int -> Int -> [Int]
+segNodes sz l0 r0 = go (l0 + sz) (r0 + sz + 1) [] []
+  where
+    go !l !r ls rs
+      | l >= r = reverse ls ++ rs
+      | otherwise =
+          let (ls', l') = if odd l then (l : ls, l + 1) else (ls, l)
+              (rs', r') = if odd r then (r - 1 : rs, r - 1) else (rs, r)
+           in go (l' `div` 2) (r' `div` 2) ls' rs'
+
+-- | 通し番号 [l, r] のうち、値が @ok@ を満たす葉を 1 つ (左を優先)。
+-- 節点の値は子の値の @op@ なので、@op@ が値を選ぶ演算なら @ok@ を満たす子が必ずある。
+{-# INLINE findLeaf #-}
+findLeaf :: (G.Vector v a) => FSeg v a -> Int -> Int -> (a -> Bool) -> Maybe Int
+findLeaf (FSeg sv sf sz) l r ok = listToMaybe (mapMaybe (\p -> if good p then Just (down p) else Nothing) (segNodes sz l r))
+  where
+    good p = U.unsafeIndex sf p && ok (G.unsafeIndex sv p)
+    down p
+      | p >= sz = p - sz
+      | good (2 * p) = down (2 * p)
+      | good (2 * p + 1) = down (2 * p + 1)
+      | otherwise = noPath "pullDP"
+
+noPath :: String -> b
+noPath name = error (name ++ ": 経路を復元できない (op が候補のどちらかを選ぶ演算でない?)")
+
+-- | もらう DP の経路: goal から、値を作ったもらう元へ戻っていく。
+-- 始点の値と同じならそこで止める (始点を優先)。
+{-# INLINE pullPath #-}
+pullPath ::
+  (G.Vector v a, Ix k, F.Foldable t) =>
+  (k, k) -> (a -> a -> a) -> [(k, a)] -> (k -> t (DPKeys k, a -> a)) -> (a -> a -> Bool) ->
+  v a -> U.Vector Bool -> Maybe (FSeg v a) -> (Int -> k) -> k -> [k]
+pullPath bnds op starts f eq vals seen mseg unidx goal
+  | not (inRange bnds goal) = []
+  | not (U.unsafeIndex seen g0) = []
+  | otherwise = go g0 goal []
+  where
+    g0 = unsafeIndex bnds goal
+    startVals = IM.fromListWith (\new old -> op old new) [(unsafeIndex bnds k, x) | (k, x) <- starts, inRange bnds k]
+    go i k acc
+      | Just sv <- IM.lookup i startVals, eq sv v = acc'
+      | otherwise = case listToMaybe (mapMaybe from (F.toList (f k))) of
+          Just j -> go j (unidx j) acc'
+          Nothing -> noPath "pullDP"
+      where
+        v = G.unsafeIndex vals i
+        acc' = k : acc
+        from (src, g) = case src of
+          At k'
+            | inRange bnds k',
+              let j = unsafeIndex bnds k',
+              j < i,
+              U.unsafeIndex seen j,
+              eq (g (G.unsafeIndex vals j)) v ->
+                Just j
+            | otherwise -> Nothing
+          Span lo hi
+            | inRange bnds lo && inRange bnds hi,
+              let l = unsafeIndex bnds lo
+                  r = unsafeIndex bnds hi,
+              l <= r,
+              r < i,
+              Just sg <- mseg ->
+                findLeaf sg l r (\x -> eq (g x) v)
+            | otherwise -> Nothing
