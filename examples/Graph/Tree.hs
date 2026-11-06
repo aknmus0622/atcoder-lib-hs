@@ -51,9 +51,10 @@ farthest = do
 --
 -- 部分木の値は (距離の和, 頂点数)。親から見ると、部分木の全頂点が w ずつ遠い。
 -- 頂点数を足すのは @finish@ (自分の分の 1)。
+-- 値がタプルなので、中身まで評価する 'rerootDP'' を使う ('rerootDP' だとサンクが溜まる)。
 sumOfDistances :: IO ()
 sumOfDistances = do
   g <- readTree
-  let res = rerootDP add (0, 0) (\_ _ w (s, c) -> (s + w * c, c)) (\_ (s, c) -> (s, c + 1)) g
+  let res = rerootDP' add (0, 0) (\_ _ w (s, c) -> (s + w * c, c)) (\_ (s, c) -> (s, c + 1)) g
       add (s1, c1) (s2, c2) = (s1 + s2, c1 + c2 :: Int)
   print (V.toList (V.map fst res))

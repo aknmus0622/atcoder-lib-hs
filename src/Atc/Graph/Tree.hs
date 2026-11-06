@@ -28,11 +28,16 @@
 -- >          (\_ _ w (s, c) -> (s + w * c, c)) (\_ (s, c) -> (s, c + 1)) g
 --
 -- 演算は可換でなくてもよい (子は隣接の順に、親から来る値は最後にまとめる)。
--- 値は表に書くときに WHNF まで評価する。タプルの中身までは評価しないので、
--- 大きな木では @(s, c)@ のような値は正格なデータ型にするか、@seq@ で評価してから返す。
+-- 'rerootDP' は値を表に書くときに WHNF までしか評価しない。タプルの中身などは評価されず、
+-- 大きな木ではサンクが溜まる。@(s, c)@ のような値には、中身まで評価する 'rerootDP'' を使う
+-- (引数は同じで、値に 'NFData' のインスタンスが要る)。
+--
+-- > rerootDP' (\(s1, c1) (s2, c2) -> (s1 + s2, c1 + c2)) (0, 0)
+-- >           (\_ _ w (s, c) -> (s + w * c, c)) (\_ (s, c) -> (s, c + 1)) g
 module Atc.Graph.Tree where
 
 import Atc.Graph
+import Control.DeepSeq (NFData, force)
 import Control.Monad.ST (runST)
 import Data.Bits (shiftR, testBit)
 import qualified Data.Vector as V
@@ -302,11 +307,43 @@ rerootDP ::
   g ->
   -- | 頂点 @v@ を根にしたときの値 (頂点番号で引く)
   GraphRet g (V.Vector b)
-rerootDP merge e up finish g = primGraph g (rerootDPC merge e up finish)
+rerootDP merge e up finish g = primGraph g (rerootDPC id id merge e up finish)
 
--- | 'rerootDP' の本体。
-rerootDPC :: (a -> a -> a) -> a -> (Int -> Int -> Int -> b -> a) -> (Int -> a -> b) -> AtcGraph -> V.Vector b
-rerootDPC merge e up finish g = runST $ do
+-- | 'rerootDP' の正格版。途中の値も表に書く値も、'force' で中身まで評価する。
+-- 引数と戻り値は 'rerootDP' と同じ。@(距離の和, 頂点数)@ のようなタプルや
+-- 'Maybe' を値にするときはこちらを使う (@seq@ を書かなくてもサンクが溜まらない)。
+--
+-- 評価するたびに値を最後までたどるので、値はタプルのように小さいものにする
+-- (リストや 'Data.Map.Map' のような大きい値だと、その大きさの分だけ毎回かかる)。
+rerootDP' ::
+  (GraphKind g, NFData a, NFData b) =>
+  -- | @merge a1 a2@: 'rerootDP' と同じ
+  (a -> a -> a) ->
+  -- | @e@: 'rerootDP' と同じ
+  a ->
+  -- | @up v c w b@: 'rerootDP' と同じ
+  (Int -> Int -> Int -> b -> a) ->
+  -- | @finish v a@: 'rerootDP' と同じ
+  (Int -> a -> b) ->
+  -- | 無向グラフ (木または森)
+  g ->
+  -- | 頂点 @v@ を根にしたときの値 (頂点番号で引く)
+  GraphRet g (V.Vector b)
+rerootDP' merge e up finish g = primGraph g (rerootDPC force force merge e up finish)
+
+-- | 'rerootDP' / 'rerootDP'' の本体。@fa@ / @fb@ は値 @a@ / @b@ を作るたびにかける評価
+-- ('id' なら WHNF まで、'force' なら中身まで)。値は @$!@ で WHNF にするので、
+-- @fa@ / @fb@ をかけた値はそのときに評価される。
+rerootDPC ::
+  (a -> a) ->
+  (b -> b) ->
+  (a -> a -> a) ->
+  a ->
+  (Int -> Int -> Int -> b -> a) ->
+  (Int -> a -> b) ->
+  AtcGraph ->
+  V.Vector b
+rerootDPC fa fb merge0 e0 up0 finish0 g = runST $ do
   -- 1. 葉から: down v = v を根とする部分木の値。
   down <- VM.new n
   U.forM_ (U.reverse order) $ \v -> do
@@ -326,7 +363,8 @@ rerootDPC merge e up finish g = runST $ do
     -- 子 (隣接の順) から来る値と、親から来る値。
     kids <- V.forM (V.fromList [(c, w) | (c, w) <- U.toList (adjacent g v), c /= p]) $ \(c, w) -> do
       dc <- VM.read down c
-      pure (c, w, up v c w $! dc)
+      let !x = up v c w dc
+      pure (c, w, x)
     let vals = V.map (\(_, _, x) -> x) kids
         -- i より前の累積と、i より後ろの累積 (親の値は最後に付ける)。
         pre = V.prescanl' merge e vals
@@ -340,6 +378,11 @@ rerootDPC merge e up finish g = runST $ do
       VM.write fromParent c $! up c v wc $! finish v $! without
   V.freeze res
   where
+    -- 作った値にすぐ評価をかけるよう、4 つの関数を包んでおく。
+    merge x y = fa (merge0 x y)
+    e = fa e0
+    up v c w x = fa (up0 v c w x)
+    finish v x = fb (finish0 v x)
     n = numVertices g
     rt = rootTreeC g 0
     order = rtOrder rt
